@@ -46,7 +46,7 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
             // Polling cada 5 segundos para ver cuando termina el procesamiento
             const interval = setInterval(async () => {
                 try {
-                const res = await fetch(`/api/documents/${result.document_id}/status`)
+                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/documents/${result.document_id}/status`)
                 const data = await res.json()
                 if (data.status === 'ready' && data.chunks > 0) {
                     setUploads(p =>

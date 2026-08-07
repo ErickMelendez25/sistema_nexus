@@ -170,7 +170,7 @@ class MonitorPublicadas:
         self._pausado = threading.Event()
         self._scan_lock = threading.Lock()   # 👈 AGREGAR ESTA LÍNEA
 
-    def _consultar(self, session, n_acuerdo: int, n_catalogo: int) -> list[dict]:
+    def _consultar(self, sesion, n_acuerdo: int, n_catalogo: int) -> list[dict]:
         payload = {
             "N_Acuerdo": (None, str(n_acuerdo)),
             "N_Catalogo": (None, str(n_catalogo)),
@@ -183,10 +183,14 @@ class MonitorPublicadas:
             "N_EstrategiaCompra": (None, ""),
         }
         headers = {"X-Requested-With": "XMLHttpRequest"}
-        r = session.post(
-            CONSULTA_URL, files=payload, headers=headers, timeout=25,
-            allow_redirects=False,   # 👈 clave: no seguir redirecciones
-        )
+        # 🔒 Mismo candado que usa la extracción de proformas — evita que
+        # este scan del monitor dispare un request justo cuando la
+        # extracción está a mitad de otro request con la MISMA sesión.
+        with sesion.request_lock:
+            r = sesion.session.post(
+                CONSULTA_URL, files=payload, headers=headers, timeout=25,
+                allow_redirects=False,   # 👈 clave: no seguir redirecciones
+            )
         # 🔎 DEBUG — confirmar si hubo redirect (sesión muerta)
         logger.info(f"🔎 DEBUG _consultar status={r.status_code} location={r.headers.get('Location')!r}")
         logger.info(f"🔎 DEBUG _consultar Content-Type enviado: {r.request.headers.get('Content-Type')!r}")
@@ -290,7 +294,7 @@ class MonitorPublicadas:
 
             def _consultar_combo(combo: tuple[int, int]):
                 n_acuerdo, n_catalogo = combo
-                return self._consultar(sesion.session, n_acuerdo, n_catalogo)
+                return self._consultar(sesion, n_acuerdo, n_catalogo)
 
             with ThreadPoolExecutor(max_workers=MAX_WORKERS_SCAN) as executor:
                 futuros = {executor.submit(_consultar_combo, combo): combo for combo in combos}
@@ -356,12 +360,13 @@ class MonitorPublicadas:
             return []
         try:
             headers = {"X-Requested-With": "XMLHttpRequest"}
-            r = sesion.session.post(
-                CONSULTA_URL.replace("/consulta", "/consultaEntregas"),
-                data={"N_OrdenCompra": n_orden_compra},
-                headers=headers,
-                timeout=25,
-            )
+            with sesion.request_lock:
+                r = sesion.session.post(
+                    CONSULTA_URL.replace("/consulta", "/consultaEntregas"),
+                    data={"N_OrdenCompra": n_orden_compra},
+                    headers=headers,
+                    timeout=25,
+                )
             r.raise_for_status()
             data = r.json()
             logger.info(f"🔎 DEBUG consultaEntregas OC {n_orden_compra} -> respuesta cruda: {data}")

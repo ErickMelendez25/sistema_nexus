@@ -345,6 +345,13 @@ def obtener_catalogos_mysql(session, progreso: dict | None = None, pc_session_re
     No hace falta Selenium ni cookies nuevas — la sesión ya vive en memoria.
     `progreso` = dict compartido con el router, para reportar avance al frontend.
     """
+    import contextlib
+    # 🔒 Mismo candado que usa el monitor de publicadas (sesion.request_lock
+    # en PeruComprasSession). Sin esto, el scan del monitor y esta
+    # extracción competían por la misma sesión HTTP y Perú Compras la
+    # mataba a la mitad, cortando el resto de catálogos.
+    _lock_sesion = pc_session_ref.request_lock if pc_session_ref is not None else contextlib.nullcontext()
+
     log_titulo("EXTRACTOR PROFORMAS PERUCOMPRAS (vía sesión FastAPI)")
 
     session.headers.update({
@@ -463,12 +470,13 @@ def obtener_catalogos_mysql(session, progreso: dict | None = None, pc_session_re
         }
         print("📡 Consultando API buscar...")
 
-        session.headers.pop("Content-Type", None)  # 👈 evita Content-Type pegado sin boundary
-        r = session.post(
-            url_buscar,
-            files=payload,
-            timeout=30,
-        )
+        with _lock_sesion:
+            session.headers.pop("Content-Type", None)  # 👈 evita Content-Type pegado sin boundary
+            r = session.post(
+                url_buscar,
+                files=payload,
+                timeout=30,
+            )
         print("✅ Respuesta recibida")
 
         try:
@@ -541,12 +549,13 @@ def obtener_catalogos_mysql(session, progreso: dict | None = None, pc_session_re
 
             for intento in range(1, MAX_INTENTOS + 1):
                 try:
-                    session.headers.pop("Content-Type", None)  # 👈 evita Content-Type pegado sin boundary
-                    r2 = session.post(
-                        url_detalle,
-                        files=body_detalle,
-                        timeout=30,
-                    )
+                    with _lock_sesion:
+                        session.headers.pop("Content-Type", None)  # 👈 evita Content-Type pegado sin boundary
+                        r2 = session.post(
+                            url_detalle,
+                            files=body_detalle,
+                            timeout=30,
+                        )
                     detalle = r2.json()
                     break  # éxito -> sale del loop de reintentos
                 except Exception as e:
@@ -1033,17 +1042,22 @@ def insertar_registros_mysql(catalogo: str, registros: list[dict]) -> tuple[int,
                 if estado_actual and estado_actual != "PENDIENTE":
                     ids_a_descartar.append(r["_id"])
 
-        if ids_a_descartar:
-            formato = ",".join(["%s"] * len(ids_a_descartar))
-            cur.execute(
-                f"""
-                UPDATE perucompras_restringidos
-                SET estado = 'descartado'
-                WHERE extraccion_id IN ({formato}) AND estado = 'pendiente'
-                """,
-                tuple(ids_a_descartar),
-            )
-            logger.info(f"[{catalogo}] {cur.rowcount} candidatas descartadas por cambio de estado real")
+            # 👇 DEBE ir DENTRO del "with conn.cursor() as cur:" de arriba.
+            # Antes estaba afuera y el cursor ya estaba cerrado -> tronaba
+            # con excepción cada vez que un catálogo tenía al menos una
+            # proforma ya no-pendiente, matando TODA la extracción y
+            # cortando de tajo el resto de catálogos sin aviso claro.
+            if ids_a_descartar:
+                formato = ",".join(["%s"] * len(ids_a_descartar))
+                cur.execute(
+                    f"""
+                    UPDATE perucompras_restringidos
+                    SET estado = 'descartado'
+                    WHERE extraccion_id IN ({formato}) AND estado = 'pendiente'
+                    """,
+                    tuple(ids_a_descartar),
+                )
+                logger.info(f"[{catalogo}] {cur.rowcount} candidatas descartadas por cambio de estado real")
 
         conn.commit()
     finally:

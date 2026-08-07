@@ -205,6 +205,15 @@ class PeruComprasSession:
 
         self.estado = "desconectado"  # desconectado | cargando | activa | perdida
         self.login_lock = threading.Lock()
+        # 🔒 Candado exclusivo para peticiones HTTP reales a Perú Compras.
+        # Perú Compras invalida la sesión si detecta 2 requests "al mismo
+        # tiempo" con las mismas cookies (igual que cuando otro usuario
+        # entra con las mismas credenciales). El monitor de publicadas y
+        # la extracción de proformas comparten la MISMA sesión — sin este
+        # candado, ambos podían disparar requests en paralelo y Perú
+        # Compras mataba la sesión real a la mitad, cortando el resto de
+        # catálogos en la extracción.
+        self.request_lock = threading.RLock()
         self.keepalive_stop = threading.Event()
         self.keepalive_thread: threading.Thread | None = None
 
