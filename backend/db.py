@@ -15,9 +15,11 @@ DB_CONFIG = dict(
     host=os.getenv("DB_HOST", "localhost"),
     user=os.getenv("DB_USER", "root"),
     password=os.getenv("DB_PASSWORD", "Erick2026#"),
+    
     database=os.getenv("DB_NAME", "helbot_db"),
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
+    ssl={"ssl": {}},
 )
 
 pool = PooledDB(
