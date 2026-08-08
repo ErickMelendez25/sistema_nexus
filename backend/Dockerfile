@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# Dependencias del sistema: compiladores, mysqlclient, y lo necesario
+# Dependencias del sistema: compiladores, mysqlclient, LibreOffice (para
+# convertir .docx a .pdf en reemplazo de Word/COM), y lo necesario
 # para instalar Google Chrome (bots de Perú Compras vía Selenium).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -19,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatk-bridge2.0-0 \
     libgtk-3-0 \
     libgbm1 \
+    libreoffice \
     && rm -rf /var/lib/apt/lists/*
 
 # Instala Google Chrome estable (mismo binario que usabas en tu Windows
@@ -34,4 +36,3 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 4002
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "4002"]

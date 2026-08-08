@@ -14,8 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
 
-import pythoncom
-import win32com.client
+import subprocess
 from docx import Document
 from fastapi import UploadFile
 from pypdf import PdfReader, PdfWriter
@@ -173,37 +172,27 @@ def quitar_texto_si(doc: Document, texto: str, condicion: bool) -> None:
 
 
 def crear_pdf_word(ruta_docx: str, ruta_pdf: str) -> None:
-    """Convierte un .docx a .pdf usando Word (COM).
+    """Convierte un .docx a .pdf usando LibreOffice en modo headless (Linux)."""
+    carpeta_salida = str(Path(ruta_pdf).parent)
+    resultado = subprocess.run(
+        [
+            "libreoffice", "--headless", "--norestore",
+            "--convert-to", "pdf",
+            "--outdir", carpeta_salida,
+            ruta_docx,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if resultado.returncode != 0:
+        raise RuntimeError(f"Error convirtiendo a PDF: {resultado.stderr}")
 
-    IMPORTANTE: se ejecuta dentro de run_in_threadpool desde los routers
-    porque win32com es bloqueante y necesita CoInitialize en el hilo
-    donde corre. Cada llamada inicializa y libera su propio COM.
-    """
-    pythoncom.CoInitialize()
-    word = None
-    documento = None
-    try:
-        word = win32com.client.Dispatch("Word.Application")
-        word.Visible = False
-        documento = word.Documents.Open(ruta_docx)
-        documento.SaveAs(ruta_pdf, FileFormat=17)
-        documento.Close()
-        word.Quit()
-    except Exception:
-        try:
-            if documento:
-                documento.Close()
-        except Exception:
-            pass
-        try:
-            if word:
-                word.Quit()
-        except Exception:
-            pass
-        raise
-    finally:
-        pythoncom.CoUninitialize()
-
+    # LibreOffice nombra el PDF igual que el .docx (mismo nombre base).
+    # Si ruta_pdf pide un nombre distinto, lo renombramos.
+    nombre_generado = Path(carpeta_salida) / (Path(ruta_docx).stem + ".pdf")
+    if str(nombre_generado) != ruta_pdf and nombre_generado.exists():
+        nombre_generado.rename(ruta_pdf)
 
 def unir_pdfs(lista_pdfs: Iterable[str], salida: str) -> None:
     writer = PdfWriter()
