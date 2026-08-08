@@ -2052,3 +2052,5 @@ app.include_router(ventas_router)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=4002, reload=True)
+
+#HOLA
