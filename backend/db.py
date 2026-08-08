@@ -14,7 +14,7 @@ from dbutils.pooled_db import PooledDB
 DB_CONFIG = dict(
     host=os.getenv("DB_HOST", "2.24.120.69"),
     user=os.getenv("DB_USER", "root"),
-    password=os.getenv("DB_PASSWORD", "8XXP0CjDltPkszCjXPaAOxVEZvQpirAdT3K6cbBPnWJsVlUa0hdjv23foe6GMGd9"),
+    password=os.environ["DB_PASSWORD"],
     database=os.getenv("DB_NAME", "helbot_db"),
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
