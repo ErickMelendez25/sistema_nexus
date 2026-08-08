@@ -3,11 +3,17 @@ services:
     build: ./backend
     restart: always
     ports:
-      - "4002:4002"
+      - '4002:4002'
     volumes:
-      - uploads_data:/data/op_productos
-      - reportes_data:/data/reportes_perucompras
+      - 'uploads_data:/data/op_productos'
+      - 'reportes_data:/data/reportes_perucompras'
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
 
 volumes:
-  uploads_data:
-  reportes_data:
+  uploads_data: null
+  reportes_data: null
