@@ -12,14 +12,13 @@ import pymysql
 from dbutils.pooled_db import PooledDB
 
 DB_CONFIG = dict(
-    host=os.getenv("DB_HOST", "localhost"),
+    host=os.getenv("DB_HOST", "2.24.120.69"),
     user=os.getenv("DB_USER", "root"),
-    password=os.getenv("DB_PASSWORD", "Erick2026#"),
-    
+    password=os.getenv("DB_PASSWORD", "8XXP0CjDltPkszCjXPaAOxVEZvQpirAdT3K6cbBPnWJsVlUa0hdjv23foe6GMGd9"),
     database=os.getenv("DB_NAME", "helbot_db"),
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
-    ssl={"ssl": {}},
+    ssl={"check_hostname": False},
 )
 
 pool = PooledDB(
