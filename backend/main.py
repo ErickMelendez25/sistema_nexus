@@ -115,12 +115,13 @@ UPLOAD_DIR = almacenamiento.upload_dir
 import re
 
 CORS_ORIGINS = [
+    "https://gruecolimp.com",
     "http://localhost:3002",
     "http://127.0.0.1:3002",
     "http://192.168.1.178:3002",
     "http://192.168.18.33:3002",
     "http://192.168.18.139:3002",
-    "https://helbot.tudominio.com",  # <-- reemplaza con tu dominio real de producción
+    "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
 ]
 
 app.add_middleware(
