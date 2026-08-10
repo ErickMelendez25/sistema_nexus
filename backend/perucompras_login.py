@@ -29,6 +29,7 @@ import logging
 from typing import Optional
 
 import requests
+import platform
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -79,10 +80,16 @@ def _limpiar_chrome_de(usuario: str):
 # Driver / login (idéntico a rapifich_api.py)
 # ============================================================
 def _crear_driver(headless: bool = False):
+    import platform
     opts = Options()
-    if headless:
+    if platform.system() != "Windows":
+        # En Linux (producción/Docker) usamos headless=new real, que ya
+        # confirmamos que funciona de forma estable en el contenedor —
+        # el truco de ventana invisible con Xvfb es más frágil ahí.
         opts.add_argument("--headless=new")
-    opts.add_argument("--window-position=-32000,-32000")  # invisible, fuera de pantalla
+    elif headless:
+        opts.add_argument("--headless=new")
+    opts.add_argument("--window-position=-32000,-32000")  # invisible, fuera de pantalla (solo aplica si no es headless)
     opts.add_argument("--window-size=1200,900")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")

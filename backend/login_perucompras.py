@@ -136,16 +136,16 @@ def _matar_procesos_chrome_huerfanos(usuario: str):
 
 
 def _crear_chrome_options(usuario: str) -> Options:
-    """Opciones de Chrome AISLADAS por usuario: perfil propio (para que
-    2 usuarios nunca compartan cookies/sesión) y ventana invisible
-    (posicionada fuera de la pantalla, sin depender de --headless)."""
     opts = Options()
 
     perfil_usuario = os.path.join(CARPETA_PERFILES, usuario)
     opts.add_argument(f"--user-data-dir={perfil_usuario}")
 
+    if platform.system() != "Windows":
+        opts.add_argument("--headless=new")
+
     opts.add_argument("--window-size=1200,900")
-    opts.add_argument("--window-position=-32000,-32000")  # invisible, fuera de pantalla
+    opts.add_argument("--window-position=-32000,-32000")  # invisible, fuera de pantalla (Windows)
     opts.add_argument("--disable-notifications")
     opts.add_argument("--disable-infobars")
     opts.add_argument("--lang=es-PE")
