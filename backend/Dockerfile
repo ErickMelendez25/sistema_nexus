@@ -28,6 +28,7 @@ ARG HELBOT_API_PUBLIC
 ARG SERVICE_URL_BACKEND
 ARG SERVICE_FQDN_BACKEND
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     default-libmysqlclient-dev \
