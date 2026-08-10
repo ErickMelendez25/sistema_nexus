@@ -1,5 +1,6 @@
 # login_perucompras.py - versión OCR avanzada, optimizada y eficiente ⚡
 import os
+import platform
 import shutil
 import threading
 import logging
@@ -10,7 +11,6 @@ import cv2
 import numpy as np
 from PIL import Image
 import pytesseract
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 
@@ -57,7 +57,10 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # === CONFIGURACIÓN ===
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+if platform.system() == "Windows":
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+else:
+    pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 URL = "https://www.catalogos.perucompras.gob.pe/AccesoGeneral"
 
@@ -70,7 +73,10 @@ logger_login = logging.getLogger("helbot.login_perucompras")
 
 # Carpeta base donde cada usuario tendrá su propio perfil de Chrome aislado.
 # Ruta corta en C:\ (fuera del proyecto) para evitar problemas de permisos.
-CARPETA_PERFILES = r"C:\HelbotChromeProfiles"
+if platform.system() == "Windows":
+    CARPETA_PERFILES = r"C:\HelbotChromeProfiles"
+else:
+    CARPETA_PERFILES = "/tmp/HelbotChromeProfiles"
 os.makedirs(CARPETA_PERFILES, exist_ok=True)
 
 # Candado global: evita que dos logins abran Chrome AL MISMO TIEMPO.
@@ -105,37 +111,28 @@ def _matar_procesos_chrome_huerfanos(usuario: str):
     """Mata SOLO los procesos chrome.exe que pertenecen al perfil de
     ESTE usuario específico (identificados por su carpeta de perfil
     única en la línea de comando), sin tocar sesiones activas de otros
-    usuarios ni el Chrome personal del sistema. Esto es necesario porque
-    detach=True deja el Chrome vivo si el backend se apaga sin cerrarlo
-    ordenadamente."""
+    usuarios ni el Chrome personal del sistema. Usa psutil, que funciona
+    igual en Windows y Linux — reemplaza el wmic/taskkill anterior, que
+    solo existía en Windows y fallaba en silencio dentro del contenedor
+    Docker (Linux) de producción."""
     try:
-        import subprocess
+        import psutil
 
         perfil_usuario = os.path.join(CARPETA_PERFILES, usuario)
+        matados = 0
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = " ".join(proc.info['cmdline'] or [])
+                if perfil_usuario in cmdline:
+                    proc.kill()
+                    matados += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
 
-        resultado = subprocess.run(
-            ["wmic", "process", "where", "name='chrome.exe'", "get", "ProcessId,CommandLine"],
-            capture_output=True, text=True, shell=True
-        )
-        salida = resultado.stdout or ""
-
-        pids_a_matar = []
-        for linea in salida.splitlines():
-            if perfil_usuario in linea:
-                partes = linea.strip().split()
-                if partes:
-                    pid = partes[-1]
-                    if pid.isdigit():
-                        pids_a_matar.append(pid)
-
-        for pid in pids_a_matar:
-            subprocess.run(["taskkill", "/f", "/pid", pid], capture_output=True, shell=True)
-
-        if pids_a_matar:
-            print(f" 🧹 {len(pids_a_matar)} proceso(s) Chrome huérfano(s) de '{usuario}' cerrado(s)")
+        if matados:
+            print(f" 🧹 {matados} proceso(s) Chrome huérfano(s) de '{usuario}' cerrado(s)")
     except Exception as e:
         print(f" ⚠️ No se pudo limpiar procesos huérfanos de '{usuario}': {e}")
-
 
 
 def _crear_chrome_options(usuario: str) -> Options:
