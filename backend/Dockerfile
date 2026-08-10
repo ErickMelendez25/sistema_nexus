@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgbm1 \
     libreoffice \
     tesseract-ocr \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
@@ -61,4 +62,4 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 4002
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "4002"]
+CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1920x1080x24", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "4002"]
