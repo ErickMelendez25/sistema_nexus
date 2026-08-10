@@ -230,3 +230,4 @@ PyMySQL==1.2.0
 pypdf==6.15.0
 slowapi==0.1.10
 ddddocr
+matplotlib
