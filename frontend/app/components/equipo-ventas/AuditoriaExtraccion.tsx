@@ -12,6 +12,8 @@ import {
   FileSpreadsheet,
   Download,
   Share2,
+  Search,
+  X,
 } from "lucide-react";
 import { fetchConToken } from "../../helbot-shared";
 
@@ -61,15 +63,35 @@ export default function AuditoriaExtraccion({ apiBase, uid, tick }: { apiBase: s
   const [porPagina] = useState(20);
   const [cargando, setCargando] = useState(false);
 
+  const [filtroTexto, setFiltroTexto] = useState("");
+  const [busquedaDebounced, setBusquedaDebounced] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [filtroDesde, setFiltroDesde] = useState("");
+  const [filtroHasta, setFiltroHasta] = useState("");
+
   const [reportesPorRun, setReportesPorRun] = useState<Record<number, ReporteGenerado[]>>({});
-  const [runAbierto, setRunAbierto] = useState<number | null>(null);
   const [descargando, setDescargando] = useState<number | null>(null);
+
+
+  useEffect(() => {
+    const t = setTimeout(() => setBusquedaDebounced(filtroTexto.trim()), 400);
+    return () => clearTimeout(t);
+  }, [filtroTexto]);
+
+  useEffect(() => {
+    setPagina(1);
+  }, [busquedaDebounced, filtroEstado, filtroDesde, filtroHasta]);
+
 
   const cargarRuns = useCallback(async () => {
     setCargando(true);
     try {
       const params = new URLSearchParams({ pagina: String(pagina), por_pagina: String(porPagina) });
       if (uid) params.set("uid", uid);
+      if (busquedaDebounced) params.set("buscar", busquedaDebounced);
+      if (filtroEstado !== "todos") params.set("estado", filtroEstado);
+      if (filtroDesde) params.set("desde", filtroDesde);
+      if (filtroHasta) params.set("hasta", filtroHasta);
       const r = await fetchConToken(`${apiBase}/perucompras/extraccion/runs?${params.toString()}`);
       if (!r.ok) throw new Error();
       const data = await r.json();
@@ -81,7 +103,7 @@ export default function AuditoriaExtraccion({ apiBase, uid, tick }: { apiBase: s
     } finally {
       setCargando(false);
     }
-  }, [apiBase, pagina, porPagina, uid]);
+  }, [apiBase, pagina, porPagina, uid, busquedaDebounced, filtroEstado, filtroDesde, filtroHasta]);
 
   useEffect(() => {
     cargarRuns();
@@ -95,23 +117,24 @@ export default function AuditoriaExtraccion({ apiBase, uid, tick }: { apiBase: s
 
   const totalPaginas = Math.max(1, Math.ceil(total / porPagina));
 
-  // ---------- Reportes por run ----------
-  const toggleReportes = async (runId: number) => {
-    if (runAbierto === runId) {
-      setRunAbierto(null);
-      return;
-    }
-    setRunAbierto(runId);
-    if (reportesPorRun[runId]) return; // ya cargados, no repetir fetch
-    try {
-      const r = await fetchConToken(`${apiBase}/perucompras/extraccion/runs/${runId}/reportes`);
-      if (!r.ok) throw new Error();
-      const data = await r.json();
-      setReportesPorRun((prev) => ({ ...prev, [runId]: data.reportes || [] }));
-    } catch {
-      setReportesPorRun((prev) => ({ ...prev, [runId]: [] }));
-    }
-  };
+  // ---------- Reportes por run: se cargan solos, sin click ----------
+  useEffect(() => {
+    runs
+      .filter((run) => run.estado === "completado" && !reportesPorRun[run.id])
+      .forEach((run) => {
+        (async () => {
+          try {
+            const r = await fetchConToken(`${apiBase}/perucompras/extraccion/runs/${run.id}/reportes`);
+            if (!r.ok) throw new Error();
+            const data = await r.json();
+            setReportesPorRun((prev) => ({ ...prev, [run.id]: data.reportes || [] }));
+          } catch {
+            setReportesPorRun((prev) => ({ ...prev, [run.id]: [] }));
+          }
+        })();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runs]);
 
   const obtenerBlobReporte = async (reporteId: number): Promise<{ blob: Blob; nombre: string } | null> => {
     const r = await fetchConToken(`${apiBase}/perucompras/extraccion/reportes/${reporteId}/descargar`);
@@ -165,9 +188,65 @@ export default function AuditoriaExtraccion({ apiBase, uid, tick }: { apiBase: s
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-3">
         <History size={16} className="text-[#4F46E5]" />
         <p className="text-sm font-semibold text-slate-800">Historial de extracciones</p>
+        {total > 0 && <span className="text-[10px] text-slate-400">({total} en total)</span>}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4 bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={filtroTexto}
+            onChange={(e) => setFiltroTexto(e.target.value)}
+            placeholder="Buscar por usuario o uid Perú Compras..."
+            className="w-full pl-7 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#4F46E5]"
+          />
+        </div>
+
+        <select
+          value={filtroEstado}
+          onChange={(e) => setFiltroEstado(e.target.value)}
+          className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#4F46E5]"
+        >
+          <option value="todos">Todos los estados</option>
+          <option value="completado">Completado</option>
+          <option value="error">Error</option>
+          <option value="procesando">Procesando</option>
+        </select>
+
+        <div className="flex items-center gap-1.5">
+          <input
+            type="date"
+            value={filtroDesde}
+            onChange={(e) => setFiltroDesde(e.target.value)}
+            className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#4F46E5]"
+          />
+          <span className="text-[10px] text-slate-400">a</span>
+          <input
+            type="date"
+            value={filtroHasta}
+            onChange={(e) => setFiltroHasta(e.target.value)}
+            className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#4F46E5]"
+          />
+        </div>
+
+        {(filtroTexto || filtroEstado !== "todos" || filtroDesde || filtroHasta) && (
+          <button
+            type="button"
+            onClick={() => {
+              setFiltroTexto("");
+              setFiltroEstado("todos");
+              setFiltroDesde("");
+              setFiltroHasta("");
+            }}
+            className="flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-red-500 transition-colors"
+          >
+            <X size={11} /> Limpiar filtros
+          </button>
+        )}
       </div>
 
       {cargando ? (
@@ -224,55 +303,50 @@ export default function AuditoriaExtraccion({ apiBase, uid, tick }: { apiBase: s
 
                 {run.estado === "completado" && (
                   <div className="border-t border-slate-100 pt-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => toggleReportes(run.id)}
-                      className="flex items-center gap-1.5 text-[11px] font-medium text-[#4F46E5] hover:underline"
-                    >
-                      <FileSpreadsheet size={12} />
-                      {runAbierto === run.id ? "Ocultar reportes" : "Ver reportes Excel"}
-                    </button>
-
-                    {runAbierto === run.id && (
-                      <div className="mt-2 space-y-1.5">
-                        {!reportesPorRun[run.id] ? (
-                          <p className="text-[11px] text-slate-400 flex items-center gap-1">
-                            <Loader2 size={11} className="animate-spin" /> Cargando reportes...
-                          </p>
-                        ) : reportesPorRun[run.id].length === 0 ? (
-                          <p className="text-[11px] text-slate-400">No se generaron reportes en esta corrida.</p>
-                        ) : (
-                          reportesPorRun[run.id].map((rep) => (
-                            <div
-                              key={rep.id}
-                              className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5"
-                            >
-                              <span className="text-[11px] text-slate-700 font-medium truncate">
-                                {LABEL_TIPO[rep.tipo] || rep.tipo}
-                              </span>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => descargarReporte(rep)}
-                                  disabled={descargando === rep.id}
-                                  title="Descargar"
-                                  className="p-1.5 rounded-md text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-colors disabled:opacity-40"
-                                >
-                                  <Download size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => compartirReporte(rep)}
-                                  disabled={descargando === rep.id}
-                                  title="Enviar por WhatsApp"
-                                  className="p-1.5 rounded-md text-slate-500 hover:bg-slate-200 hover:text-emerald-600 transition-colors disabled:opacity-40"
-                                >
-                                  <Share2 size={13} />
-                                </button>
-                              </div>
+                    {!reportesPorRun[run.id] ? (
+                      <p className="text-[11px] text-slate-400 flex items-center gap-1">
+                        <Loader2 size={11} className="animate-spin" /> Cargando reportes...
+                      </p>
+                    ) : reportesPorRun[run.id].length === 0 ? (
+                      <p className="text-[11px] text-slate-400">No se generaron reportes en esta corrida.</p>
+                    ) : (
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {reportesPorRun[run.id].map((rep) => (
+                          <div
+                            key={rep.id}
+                            className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg pl-1.5 pr-1 py-1 hover:border-emerald-300 hover:shadow-sm transition-all"
+                          >
+                            <div className="w-6 h-6 rounded-md bg-emerald-50 flex items-center justify-center shrink-0">
+                              <FileSpreadsheet size={13} className="text-emerald-600" />
                             </div>
-                          ))
-                        )}
+                            <span
+                              className="text-[10px] font-medium text-slate-600 truncate flex-1 min-w-0"
+                              title={LABEL_TIPO[rep.tipo] || rep.tipo}
+                            >
+                              {LABEL_TIPO[rep.tipo] || rep.tipo}
+                            </span>
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => descargarReporte(rep)}
+                                disabled={descargando === rep.id}
+                                title="Descargar"
+                                className="p-1 rounded text-slate-400 hover:bg-slate-100 hover:text-indigo-600 transition-colors disabled:opacity-40"
+                              >
+                                <Download size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => compartirReporte(rep)}
+                                disabled={descargando === rep.id}
+                                title="Enviar por WhatsApp"
+                                className="p-1 rounded text-slate-400 hover:bg-slate-100 hover:text-emerald-600 transition-colors disabled:opacity-40"
+                              >
+                                <Share2 size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

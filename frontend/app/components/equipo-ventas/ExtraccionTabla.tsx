@@ -13,6 +13,7 @@ interface FilaExtraccion {
   requerimiento: string;
   proforma: string;
   n_proforma_id: string;
+  n_entidad_semaforo: number;
   color_semaforo: string;
   estado: string;
   procedimiento: string;
@@ -21,15 +22,24 @@ interface FilaExtraccion {
   entidad: string;
   ruc: string;
   producto: string;
+  ficha_producto: string;
   marca: string;
   codigo_unico: string;
   cantidad: number;
   precio_unitario_base: number;
   precio_ofertado: number;
   moneda: string;
+  direccion_entrega: string;
   departamento: string;
   provincia: string;
   distrito: string;
+  fecha_inicio_entrega: string;
+  fecha_fin_entrega: string;
+  plazo_dias: string;
+  subtotal: number;
+  costo_productos: number;
+  costo_envio: number;
+  igv: number;
   pdf_producto: string;
   pdf_requerimiento: string;
   imagen_producto: string;
@@ -67,6 +77,10 @@ function formatearFechaHora(iso: string | null) {
 }
 
 const kpiVacios: Kpis = { total: 0, pendiente: 0, restringida: 0, cotizada: 0, desierta: 0, sin_estado: 0 };
+
+// Total de columnas de la tabla (usado en colSpan de las filas de estado vacío/cargando).
+// N° + 33 columnas del orden pedido + Estado al final = 35.
+const TOTAL_COLUMNAS = 35;
 
 export default function ExtraccionTabla({ apiBase, catalogos, uid, tick }: { apiBase: string; catalogos: string[]; uid: string; tick?: number }) {
   const [catalogoActivo, setCatalogoActivo] = useState("");
@@ -273,62 +287,85 @@ const armarParamsFiltro = useCallback(() => {
           <table className="w-full text-xs whitespace-nowrap">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
               <tr>
-                <th className="px-3 py-2 text-left">Fecha extracción</th>
+                <th className="px-3 py-2 text-right">N°</th>
+                <th className="px-3 py-2 text-left">Fecha guardado</th>
                 <th className="px-3 py-2 text-left">Requerimiento</th>
                 <th className="px-3 py-2 text-left">Proforma</th>
-                <th className="px-3 py-2 text-center">Estado</th>
-                <th className="px-3 py-2 text-center">Semáforo</th>
+                <th className="px-3 py-2 text-left">N° Proforma ID</th>
+                <th className="px-3 py-2 text-center">N° Semáforo</th>
+                <th className="px-3 py-2 text-center">Color semáforo</th>
+                <th className="px-3 py-2 text-left">Procedimiento</th>
+                <th className="px-3 py-2 text-left">Fecha emisión</th>
+                <th className="px-3 py-2 text-left">Fecha límite cotización</th>
                 <th className="px-3 py-2 text-left">Entidad</th>
                 <th className="px-3 py-2 text-left">RUC</th>
                 <th className="px-3 py-2 text-left">Producto</th>
+                <th className="px-3 py-2 text-left">Ficha producto</th>
                 <th className="px-3 py-2 text-left">Marca</th>
                 <th className="px-3 py-2 text-left">Código único</th>
                 <th className="px-3 py-2 text-right">Cantidad</th>
-                <th className="px-3 py-2 text-right">P. base</th>
+                <th className="px-3 py-2 text-right">P. unit. base</th>
                 <th className="px-3 py-2 text-right">P. ofertado</th>
                 <th className="px-3 py-2 text-left">Moneda</th>
-                <th className="px-3 py-2 text-left">Ubicación</th>
-                <th className="px-3 py-2 text-center">Foto</th>
+                <th className="px-3 py-2 text-left">Dirección entrega</th>
+                <th className="px-3 py-2 text-left">Departamento</th>
+                <th className="px-3 py-2 text-left">Provincia</th>
+                <th className="px-3 py-2 text-left">Distrito</th>
+                <th className="px-3 py-2 text-left">Fecha inicio entrega</th>
+                <th className="px-3 py-2 text-left">Fecha fin entrega</th>
+                <th className="px-3 py-2 text-right">Plazo días</th>
+                <th className="px-3 py-2 text-right">Subtotal</th>
+                <th className="px-3 py-2 text-right">Costo productos</th>
+                <th className="px-3 py-2 text-right">Costo envío</th>
+                <th className="px-3 py-2 text-right">IGV</th>
                 <th className="px-3 py-2 text-center">PDF producto</th>
                 <th className="px-3 py-2 text-center">PDF requerimiento</th>
+                <th className="px-3 py-2 text-center">Imagen producto</th>
+                {/* No venía en el orden pedido — se deja al final para no perder el dato */}
+                <th className="px-3 py-2 text-center">Estado</th>
               </tr>
             </thead>
             <tbody>
               {cargando ? (
-                <tr><td colSpan={18} className="text-center py-10 text-slate-400"><Loader2 size={16} className="animate-spin inline mr-2" /> Cargando...</td></tr>
+                <tr><td colSpan={TOTAL_COLUMNAS} className="text-center py-10 text-slate-400"><Loader2 size={16} className="animate-spin inline mr-2" /> Cargando...</td></tr>
               ) : filas.length === 0 ? (
-                <tr><td colSpan={18} className="text-center py-10 text-slate-400">Sin resultados para este catálogo/filtros.</td></tr>
+                <tr><td colSpan={TOTAL_COLUMNAS} className="text-center py-10 text-slate-400">Sin resultados para este catálogo/filtros.</td></tr>
               ) : (
-                filas.map((f) => (
+                filas.map((f, idx) => (
                   <tr key={f.id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-3 py-2 text-right text-slate-400">{(pagina - 1) * porPagina + idx + 1}</td>
                     <td className="px-3 py-2 text-slate-500">{formatearFechaHora(f.fecha_guardado)}</td>
                     <td className="px-3 py-2 font-medium text-slate-800">{f.requerimiento}</td>
                     <td className="px-3 py-2">{f.proforma}</td>
-                    <td className="px-3 py-2 text-center">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badgeEstado(f.estado)}`}>{f.estado || "—"}</span>
-                    </td>
+                    <td className="px-3 py-2">{f.n_proforma_id}</td>
+                    <td className="px-3 py-2 text-center">{f.n_entidad_semaforo}</td>
                     <td className="px-3 py-2 text-center">
                       <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badgeSemaforo(f.color_semaforo)}`}>{f.color_semaforo}</span>
                     </td>
+                    <td className="px-3 py-2 max-w-[180px] truncate" title={f.procedimiento}>{f.procedimiento}</td>
+                    <td className="px-3 py-2">{f.fecha_emision}</td>
+                    <td className="px-3 py-2">{f.fecha_limite_cotizacion}</td>
                     <td className="px-3 py-2 max-w-[220px] truncate" title={f.entidad}>{f.entidad}</td>
                     <td className="px-3 py-2">{f.ruc}</td>
                     <td className="px-3 py-2 max-w-[200px] truncate" title={f.producto}>{f.producto}</td>
+                    <td className="px-3 py-2 max-w-[260px] truncate" title={f.ficha_producto}>{f.ficha_producto}</td>
                     <td className="px-3 py-2">{f.marca}</td>
                     <td className="px-3 py-2">{f.codigo_unico}</td>
                     <td className="px-3 py-2 text-right">{f.cantidad}</td>
                     <td className="px-3 py-2 text-right">{Number(f.precio_unitario_base || 0).toFixed(2)}</td>
                     <td className="px-3 py-2 text-right font-semibold">{Number(f.precio_ofertado || 0).toFixed(2)}</td>
                     <td className="px-3 py-2">{f.moneda}</td>
-                    <td className="px-3 py-2 max-w-[180px] truncate" title={`${f.departamento} / ${f.provincia} / ${f.distrito}`}>
-                      {[f.departamento, f.provincia, f.distrito].filter(Boolean).join(" / ") || "—"}
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      {f.imagen_producto ? (
-                        <button type="button" onClick={() => setPreview(f.imagen_producto)}>
-                          <img src={f.imagen_producto} alt="producto" className="w-8 h-8 rounded object-cover border border-slate-200 mx-auto hover:scale-110 transition-transform" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                        </button>
-                      ) : <ImageIcon size={14} className="text-slate-200 mx-auto" />}
-                    </td>
+                    <td className="px-3 py-2 max-w-[200px] truncate" title={f.direccion_entrega}>{f.direccion_entrega}</td>
+                    <td className="px-3 py-2">{f.departamento}</td>
+                    <td className="px-3 py-2">{f.provincia}</td>
+                    <td className="px-3 py-2">{f.distrito}</td>
+                    <td className="px-3 py-2">{f.fecha_inicio_entrega}</td>
+                    <td className="px-3 py-2">{f.fecha_fin_entrega}</td>
+                    <td className="px-3 py-2 text-right">{f.plazo_dias}</td>
+                    <td className="px-3 py-2 text-right">{Number(f.subtotal || 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right">{Number(f.costo_productos || 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right">{Number(f.costo_envio || 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right">{Number(f.igv || 0).toFixed(2)}</td>
                     <td className="px-3 py-2 text-center">
                       {f.pdf_producto ? (
                         <a href={f.pdf_producto} target="_blank" rel="noopener noreferrer" title="Ver PDF del producto">
@@ -342,6 +379,16 @@ const armarParamsFiltro = useCallback(() => {
                           <FileText size={16} className="text-red-600 hover:text-red-700 mx-auto" />
                         </a>
                       ) : <FileText size={14} className="text-slate-200 mx-auto" />}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {f.imagen_producto ? (
+                        <button type="button" onClick={() => setPreview(f.imagen_producto)}>
+                          <img src={f.imagen_producto} alt="producto" className="w-8 h-8 rounded object-cover border border-slate-200 mx-auto hover:scale-110 transition-transform" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                        </button>
+                      ) : <ImageIcon size={14} className="text-slate-200 mx-auto" />}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badgeEstado(f.estado)}`}>{f.estado || "—"}</span>
                     </td>
                   </tr>
                 ))

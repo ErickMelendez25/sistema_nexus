@@ -1587,7 +1587,7 @@ const proformasFiltradas = useMemo(() => {
                         </thead>
                         <tbody>
                           {cotizacionDetalle.fichas.map((f, i) => (
-                            <tr key={i} className="border-t border-slate-100">
+                            <tr key={`${f.fichaProducto}-${f.producto}-${i}`} className="border-t border-slate-100">
                               <td className="px-3 py-2 max-w-[220px]">{f.producto}</td>
                               <td className="px-3 py-2 max-w-[280px]">
                                 <span className="line-clamp-2 text-slate-600" title={f.fichaProducto}>

@@ -1,5 +1,5 @@
 export const API_BASE =
-  process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
+  process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4002";
 
 export const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws/alertas";
 

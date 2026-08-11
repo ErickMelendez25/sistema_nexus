@@ -52,9 +52,9 @@ try:
     from login_perucompras import intentar_login_con_ocr
     from acciones_post_login import cerrar_ventanas_emergentes
     USE_LOGIN_MODULE = True
-except ImportError:
+except ImportError as e:
+    logger.warning(f"⚠️ No se pudo importar login_perucompras — usando fallback con selectores INCORRECTOS. Motivo: {e}")
     USE_LOGIN_MODULE = False
-
 
 # ============================================================
 # CONFIG

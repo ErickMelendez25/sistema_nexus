@@ -32,6 +32,8 @@
 
 
   import CrearOrdenModal from "./CrearOrdenModal";
+  import TabFichaOcr from "./TabFichaOcr";
+  import PanelConsultaMef from "./PanelConsultaMef";
 
 
   import {
@@ -240,16 +242,7 @@ interface ResumenChat {
     [key: string]: unknown;
   }
 
-  interface DatosFicha {
-    unidad_ejecutora?: string | null;
-    expediente?: string | null;
-    entidad?: string | null;
-    producto?: string | null;
-    cantidad?: string | null;
-    monto?: string | null;
-    fecha?: string | null;
-    otros?: Record<string, unknown> | null;
-  }
+
 
   interface Orden {
     id: number;
@@ -263,7 +256,7 @@ interface ResumenChat {
   }
 
   type FiltroPublicadas = { acuerdo_marco: string; catalogo: string; categoria: string };
-  type MefForm = { sec_ejec: string; expediente: string };
+
   type TabId = "monitor" | "ficha" | "ventas" | "ventas_erp" | "auditoria" |"chat"| "cobranzas-doc-pago"
     | "cobranzas-carta-nota" | "equipo-ventas-operaciones" | "equipo-ventas-bigdata";
 
@@ -1594,15 +1587,19 @@ interface ResumenChat {
     // Seguimiento ve las 4 pestañas originales. Logística y Ventas solo ven
     // "Ventas ERP". Gerencia ve SOLO el reporte de auditoría (no necesita
     // operar nada, solo supervisar).
-  const tabs = esAdmin
-      ? todosLosTabs
-      : esGerencia
-      ? todosLosTabs.filter((t) => t.id === "auditoria" || t.id === "chat")
-      : esSeguimiento
-      ? todosLosTabs.filter((t) => t.id !== "auditoria")
-      : esPracticante
-      ? todosLosTabs.filter((t) => t.id === "chat") // Practicante solo ve Chat (+ Equipo Ventas/Operaciones, que viene de Sidebar.tsx)
-      : todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat");
+const tabs = esAdmin
+    ? todosLosTabs
+    : esGerencia
+    ? todosLosTabs.filter((t) => t.id === "auditoria" || t.id === "chat")
+    : esSeguimiento
+    ? todosLosTabs.filter((t) => t.id !== "auditoria")
+    : esPracticante
+    ? todosLosTabs.filter((t) => t.id === "chat")
+    : esVentas
+    ? todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat" || t.id === "ficha")
+    : esCobranzas
+    ? todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat" || t.id === "ficha")
+    : todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat");
     // Si el rol solo tiene una pestaña disponible, forzamos esa pestaña
     // (evita que se quede en "monitor" por el estado inicial de useState).
     const esTabCobranzas = tab === "cobranzas-doc-pago" || tab === "cobranzas-carta-nota";
@@ -1638,24 +1635,30 @@ interface ResumenChat {
         // Cobranzas puede usar:
         // ventas_erp
         // chat
+        // ficha (Ficha OCR + MEF)
         // cobranzas-doc-pago
         // cobranzas-carta-nota
         if (
           tab !== "ventas_erp" &&
           tab !== "chat" &&
+          tab !== "ficha" &&
           !esTabCobranzas
         ) {
           setTab("ventas_erp");
         }
-      } else if (esPracticante) {
-        if (tab !== "equipo-ventas-operaciones" && tab !== "chat") {
-          setTab("equipo-ventas-operaciones");
-        }
-      } else {
-        if (tab !== "ventas_erp" && tab !== "chat") {
-          setTab("ventas_erp");
-        }
-      }
+        } else if (esPracticante) {
+            if (tab !== "equipo-ventas-operaciones" && tab !== "chat") {
+              setTab("equipo-ventas-operaciones");
+            }
+          } else if (esVentas) {
+            if (tab !== "ventas_erp" && tab !== "chat" && tab !== "ficha") {
+              setTab("ventas_erp");
+            }
+          } else {
+            if (tab !== "ventas_erp" && tab !== "chat") {
+              setTab("ventas_erp");
+            }
+          }
     }, [
       usuario,
       esSeguimiento,
@@ -2532,7 +2535,7 @@ interface ResumenChat {
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 max-h-[720px] overflow-y-auto pr-1">
                 {erpParaMostrar.map((v, i) => (
                   <CardVentaErp
-                    key={String(v.id ?? i)}
+                    key={String(v.id ?? ocamDe(v) ?? i)}
                     v={v}
                     sinCoincidenciaPublicada={codigosErpSinPublicada.has(normalizarCodigo(ocamDe(v)))}
                     onAbrirOps={onAbrirOps}
@@ -3310,255 +3313,7 @@ interface ResumenChat {
       </div>
     );
   }
-  // ============================================================
-  // TAB 2 — Ficha OCR + consulta MEF
-  // ============================================================
-  function TabFichaOcr({ publicadas }: { publicadas: Publicada[] }) {
-    const [publicadaId, setPublicadaId] = useState("");
-    const [archivo, setArchivo] = useState<File | null>(null);
-    const [cargandoOcr, setCargandoOcr] = useState(false);
-    const [datos, setDatos] = useState<DatosFicha | null>(null);
-    const [errorOcr, setErrorOcr] = useState("");
 
-    const [mef, setMef] = useState<MefForm>({ sec_ejec: "", expediente: "" });
-    const [cargandoMef, setCargandoMef] = useState(false);
-    const [erroMef, setErrorMef] = useState("");
-
-    const [completando, setCompletando] = useState(false);
-    const [erpOk, setErpOk] = useState(false);
-
-    const subirFicha = async () => {
-      if (!archivo) return;
-      setCargandoOcr(true);
-      setErrorOcr("");
-      try {
-        const fd = new FormData();
-        fd.append("archivo", archivo);
-        if (publicadaId) fd.append("publicada_id", publicadaId);
-        const r = await fetch(`${API_BASE}/ficha/ocr`, { method: "POST", body: fd });
-        if (!r.ok) throw new Error((await r.json()).detail || "Error OCR");
-        const d = await r.json();
-        setDatos(d.datos as DatosFicha);
-      } catch (e) {
-        setErrorOcr(e instanceof Error ? e.message : "Error desconocido");
-      } finally {
-        setCargandoOcr(false);
-      }
-    };
-
-    const consultarMef = async () => {
-      setCargandoMef(true);
-      setErrorMef("");
-      try {
-        const r = await fetch(`${API_BASE}/mef/consultar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(mef),
-        });
-        if (!r.ok) throw new Error((await r.json()).detail || "No se pudo resolver el captcha/expediente");
-        const d = await r.json();
-        setDatos((prev) => ({ ...(prev || {}), otros: d.data }));
-      } catch (e) {
-        setErrorMef(e instanceof Error ? e.message : "Error desconocido");
-      } finally {
-        setCargandoMef(false);
-      }
-    };
-
-    const completarErp = async () => {
-      if (!publicadaId || !datos) return;
-      setCompletando(true);
-      try {
-        const r = await fetch(`${API_BASE}/erp/completar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ publicada_id: publicadaId, origen: "ocr", datos }),
-        });
-        setErpOk(r.ok);
-      } finally {
-        setCompletando(false);
-      }
-    };
-
-    return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="font-semibold text-slate-900 mb-1 tracking-tight">
-              Subir ficha
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Opcional — aplica OCR para prellenar el ERP. También puedes registrar todo directo en la plataforma ERP.
-            </p>
-
-            <select
-              value={publicadaId}
-              onChange={(e) => setPublicadaId(e.target.value)}
-              style={{ fontFamily: "var(--font-mono)" }}
-              className="w-full mb-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-            >
-              <option value="">Vincular a publicada (opcional)</option>
-              {publicadas.map((p) => (
-                <option key={p.N_OrdenCompra} value={p.C_OrdenCompra}>
-                  {p.C_OrdenCompra} — {p.C_Entidad}
-                </option>
-              ))}
-            </select>
-
-            <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-lg py-8 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors">
-              <Upload size={20} className="text-slate-400" />
-              <span className="text-xs text-slate-500 text-center px-4">{archivo ? archivo.name : "Click para subir ficha (imagen o PDF)"}</span>
-              <input type="file" accept="image/*,.pdf" className="hidden" onChange={(e) => setArchivo(e.target.files?.[0] ?? null)} />
-            </label>
-
-            <button
-              onClick={subirFicha}
-              disabled={!archivo || cargandoOcr}
-              className="mt-3 w-full flex items-center justify-center gap-2 bg-[#10172A] text-white font-medium rounded-lg py-2.5 text-sm disabled:opacity-40 hover:bg-[#1B2438] transition-colors"
-            >
-              {cargandoOcr ? <Loader2 size={15} className="animate-spin" /> : <FileScan size={15} />}
-              Aplicar OCR
-            </button>
-            {errorOcr && (
-              <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
-                <AlertTriangle size={12} />
-                {errorOcr}
-              </p>
-            )}
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="font-semibold text-slate-900 mb-1 tracking-tight">
-              Consulta MEF (código 1 / código 2)
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">Si no usaste OCR, completa manualmente estos 2 códigos. Helbot resuelve el captcha automáticamente.</p>
-
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <input
-                placeholder="Código 1 · Unidad Ejecutora"
-                maxLength={6}
-                value={mef.sec_ejec}
-                onChange={(e) => setMef({ ...mef, sec_ejec: e.target.value.replace(/\D/g, "") })}
-                style={{ fontFamily: "var(--font-mono)" }}
-                className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-              <input
-                placeholder="Código 2 · Expediente"
-                maxLength={10}
-                value={mef.expediente}
-                onChange={(e) => setMef({ ...mef, expediente: e.target.value.replace(/\D/g, "") })}
-                style={{ fontFamily: "var(--font-mono)" }}
-                className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-            </div>
-
-            <button
-              onClick={consultarMef}
-              disabled={!mef.sec_ejec || !mef.expediente || cargandoMef}
-              className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-medium rounded-lg py-2.5 text-sm disabled:opacity-40 hover:bg-emerald-700 transition-colors"
-            >
-              {cargandoMef ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-              Consultar (resuelve captcha automáticamente)
-            </button>
-            {erroMef && (
-              <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
-                <AlertTriangle size={12} />
-                {erroMef}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-xl p-5 h-fit lg:sticky lg:top-36">
-          <h3 style={{ fontFamily: "var(--font-display)" }} className="font-semibold text-slate-900 mb-1 tracking-tight">
-            Datos extraídos
-          </h3>
-          <p className="text-xs text-slate-500 mb-4">Editables antes de enviar al ERP.</p>
-
-          {!datos ? (
-            <EmptyState icon={FileScan} titulo="Aún no hay datos" detalle="Sube una ficha o consulta el MEF para ver los campos aquí." compacto />
-          ) : (
-            <div className="space-y-3">
-              {Object.entries(datos)
-                .filter(([k]) => k !== "otros")
-                .map(([campo, valor]) => (
-                  <div key={campo}>
-                    <label style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">
-                      {campo.replace("_", " ")}
-                    </label>
-                    <input
-                      value={(valor as string) || ""}
-                      onChange={(e) => setDatos({ ...datos, [campo]: e.target.value })}
-                      className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
-                    />
-                  </div>
-                ))}
-                {datos.otros && (
-                <div className="pt-2 border-t border-slate-200">
-                  <p style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] text-slate-500 uppercase tracking-wide mb-2 font-medium">
-                    Datos MEF
-                  </p>
-                  {(() => {
-                    const registros: any[] = (datos.otros as any)?.registros || [];
-                    if (registros.length === 0) {
-                      return <p className="text-[11px] text-slate-400">Sin resultados en el MEF para este expediente.</p>;
-                    }
-                    return (
-                      <div className="space-y-2">
-                        {registros.map((reg: any, i: number) => (
-                          <div
-                            key={i}
-                            className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
-                          >
-                            <div className="min-w-0">
-                              <p style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] text-slate-500">
-                                {reg["Doc"]} · {reg["Numero"]} · {reg["Fecha"]}
-                              </p>
-                              <p className="text-[10px] text-slate-400">
-                                Ciclo {reg["Ciclo"]} · Fase {reg["Fase"]} · Id Trx {reg["Id Trx"]}
-                              </p>
-                            </div>
-                            <div className="text-right shrink-0">
-                              <p style={{ fontFamily: "var(--font-mono)" }} className="text-sm font-semibold text-slate-800">
-                                {reg["Moneda"]} {Number(String(reg["Monto"] || 0).replace(/,/g, "")).toLocaleString("es-PE", { minimumFractionDigits: 2 })}
-                              </p>
-                              <span
-                                className={`inline-block text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-                                  reg["Est."] === "A"
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                    : "bg-slate-100 text-slate-500 border-slate-200"
-                                }`}
-                              >
-                                Est. {reg["Est."]}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-              <button
-                onClick={completarErp}
-                disabled={!publicadaId || completando}
-                className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-medium rounded-lg py-2.5 text-sm mt-4 disabled:opacity-40 hover:bg-emerald-700 transition-colors"
-              >
-                {completando ? <Loader2 size={15} className="animate-spin" /> : <ChevronRight size={15} />}
-                Completar ERP
-              </button>
-              {!publicadaId && <p className="text-[11px] text-slate-400 mt-2">Selecciona una publicada arriba para poder completar el ERP.</p>}
-              {erpOk && (
-                <p className="text-xs text-emerald-700 mt-2 flex items-center gap-1">
-                  <CheckCircle2 size={12} /> ERP actualizado
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   // ============================================================
   // TAB 3 — Ventas: completar precios

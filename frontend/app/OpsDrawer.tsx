@@ -8,6 +8,10 @@ import {
 import { VentaErp, OpResumen, ocamDe, codigoVentaDe } from "./TabVentasErp";
 import { EmpresaOption, listarEmpresas, contactosDeProveedor, crearContactoProveedor, ContactoProveedor } from "./erp-shared";
 
+import FormularioProductoModal from "./FormularioProductoModal";
+
+import FormularioBloqueModal from "./FormularioBloqueModal";
+
 const API_BASE = process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
 
 interface Props {
@@ -418,6 +422,14 @@ function ModalCrearProveedor({
 
   const set = (campo: keyof typeof form, valor: string) => setForm((f) => ({ ...f, [campo]: valor }));
 
+  useEffect(() => {
+      function onKeyDown(e: KeyboardEvent) {
+        if (e.key === "Escape") onCerrar();
+      }
+      window.addEventListener("keydown", onKeyDown);
+      return () => window.removeEventListener("keydown", onKeyDown);
+    }, [onCerrar]);
+
   const guardar = async () => {
     if (!form.ruc.trim() || !form.razonSocial.trim()) {
       setError("RUC y Razón social son obligatorios.");
@@ -548,6 +560,15 @@ function ModalCrearTransporte({
   const [error, setError] = useState("");
 
   const set = (campo: keyof typeof form, valor: string) => setForm((f) => ({ ...f, [campo]: valor }));
+
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onCerrar();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCerrar]);
 
   const guardar = async () => {
     if (!form.ruc.trim() || !form.razonSocial.trim()) {
@@ -823,6 +844,22 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
       cargarOps();
     }
   }, [ultimoEventoOps]);
+
+
+  useEffect(() => {
+    if (!venta) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [venta, onClose]);
+
+  if (!venta) return null;
+
+
+
+  console.log("VENTA COMPLETA:", venta);
 
   if (!venta) return null;
 
@@ -2440,6 +2477,16 @@ const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState("");
   const [imagenesPorProducto, setImagenesPorProducto] = useState<Record<string, ImagenProducto[]>>({});
 
+
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onCerrar();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCerrar]);
+
   // Carga las imágenes que cada producto ya tuviera (ej. si el usuario
   // ya había subido fotos antes de entrar al modo bloque).
   useEffect(() => {
@@ -2543,13 +2590,34 @@ return (
         </div>
 
           <div className="p-6 space-y-4">
-          <div className="space-y-4">
-            <SeccionForm titulo="Datos compartidos" icono={Package} color="indigo">
-              <div
-                className={`grid grid-cols-1 gap-4 items-start ${
-                  (modo === "confirmar" || modo === "ver") && esSeguimiento ? "sm:grid-cols-4" : "sm:grid-cols-3"
-                }`}
-              >
+            <FormularioBloqueModal
+              items={items}
+              actualizarItem={actualizarItem}
+              compartido={{
+                proveedor_nombre: compartido.proveedor_nombre,
+                proveedor_telefono: compartido.proveedor_telefono,
+                tipo_envio: compartido.tipo_envio,
+                agencia_transporte: compartido.agencia_transporte,
+                observaciones: compartido.observaciones,
+                otras_observaciones: compartido.otras_observaciones,
+                observaciones_transporte: compartido.observaciones_transporte,
+              }}
+              actualizarCompartido={actualizarCompartido}
+              soloLectura={soloLectura}
+              empresas={empresas || []}
+              mostrarSelectorEmpresa={(modo === "confirmar" || modo === "ver") && !!esSeguimiento}
+              empresaId={empresaId}
+              onEmpresaChange={setEmpresaId}
+              totalProductos={totalProductos}
+              totalFlete={totalFlete}
+              pdfConsolidadoUrl={
+                items.some((it) => (imagenesPorProducto[it.codigo] || []).length > 0)
+                  ? `${API_BASE}/erp/ordenes/${venta.id}/productos/pdf-consolidado-preview?${items
+                      .map((it) => `codigos=${encodeURIComponent(it.codigo)}`)
+                      .join("&")}`
+                  : null
+              }
+              renderBuscadorProveedor={() => (
                 <BuscadorEntidad<ProveedorOption>
                   label="Proveedor"
                   value={compartido.proveedor_nombre}
@@ -2566,160 +2634,38 @@ return (
                   seleccionado={proveedores.find((p) => p.razonSocial === compartido.proveedor_nombre) || null}
                   onCrearNuevo={() => setModalProveedorAbierto(true)}
                 />
-
-                <Campo label="Teléfono proveedor" value={compartido.proveedor_telefono} onChange={(v) => actualizarCompartido("proveedor_telefono", v)} disabled={soloLectura} tipo="telefono" maxLength={20} placeholder="+51 937 119 045" />
-
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Contacto del proveedor</label>
-                  <ContactoProveedorInfo proveedorId={compartido.proveedor_id ? parseInt(compartido.proveedor_id, 10) : null} />
-                </div>
-
-                {(modo === "confirmar" || modo === "ver") && esSeguimiento && (
-                  <div>
-                    <label className="block text-[11px] font-medium text-indigo-700 mb-1">
-                      Empresa (aplica a todo el bloque)
-                    </label>
-                    <select
-                      value={empresaId}
-                      disabled={soloLectura}
-                      onChange={(e) => setEmpresaId(e.target.value)}
-                      className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-slate-50 disabled:text-slate-500"
-                    >
-                      <option value="">Mantener empresa individual de cada producto</option>
-                      {(empresas || []).map((em) => (
-                        <option key={em.id} value={em.id}>{em.razonSocial}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            </SeccionForm>
-
-            <SeccionForm titulo="Tipo de envío" icono={Truck} color="amber">
-              <div
-                className={`grid grid-cols-1 gap-4 items-start ${
-                  compartido.tipo_envio === "AGENCIA" ? "sm:grid-cols-3" : ""
-                }`}
-              >
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Tipo de envío</label>
-                  <SelectorTipoEnvio
-                    value={compartido.tipo_envio}
-                    onChange={(v) => actualizarCompartido("tipo_envio", v)}
-                    onAutorellenar={(texto) => actualizarCompartido("observaciones", texto)}
-                    disabled={soloLectura}
-                  />
-                </div>
-
-                {compartido.tipo_envio === "AGENCIA" && (
-                  <BuscadorEntidad<TransporteOption>
-                    label="Agencia de transporte"
-                    value={compartido.agencia_transporte}
-                    onChange={(v) => actualizarCompartido("agencia_transporte", v)}
-                    onSeleccionar={(t) => {
-                      actualizarCompartido("agencia_transporte", t.razonSocial);
-                      actualizarCompartido("transporte_id", String(t.id));
-                    }}
-                    opciones={transportes}
-                    cargando={false}
-                    disabled={soloLectura}
-                    placeholder="Buscar agencia de transporte..."
-                    seleccionado={transportes.find((t) => t.razonSocial === compartido.agencia_transporte) || null}
-                    onCrearNuevo={() => setModalTransporteAbierto(true)}
-                  />
-                )}
-
-                {compartido.tipo_envio === "AGENCIA" && (
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-500 mb-1">Observaciones transporte (opcional)</label>
-                    <textarea
-                      value={compartido.observaciones_transporte}
-                      disabled={soloLectura}
-                      onChange={(e) => actualizarCompartido("observaciones_transporte", e.target.value)}
-                      placeholder="Se agrega antes del desglose automático de flete por producto..."
-                      rows={3}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 disabled:bg-slate-50 disabled:text-slate-500"
-                    />
-                  </div>
-                )}
-              </div>
-            </SeccionForm>
-            <SeccionForm titulo="Observaciones" icono={MessageSquareText} color="violet">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2">
-                  <CampoObservaciones value={compartido.observaciones} onChange={(v) => actualizarCompartido("observaciones", v)} disabled={soloLectura} />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Otras observaciones</label>
-                  <textarea
-                    value={compartido.otras_observaciones}
-                    disabled={soloLectura}
-                    onChange={(e) => actualizarCompartido("otras_observaciones", e.target.value)}
-                    rows={3}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 disabled:bg-slate-50 disabled:text-slate-500"
-                  />
-                </div>
-              </div>
-            </SeccionForm>
-          </div>
-
-      <div className="rounded-xl border border-slate-200 border-l-4 border-l-emerald-400 overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
-              <p className="text-[13px] font-bold text-slate-800">Precio y flete — independiente por producto</p>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-semibold text-slate-700">Total: S/ {totalProductos.toFixed(2)}</span>
-                {compartido.tipo_envio === "AGENCIA" && <span className="text-xs font-semibold text-slate-700">Flete: S/ {totalFlete.toFixed(2)}</span>}
-                {items.some((it) => (imagenesPorProducto[it.codigo] || []).length > 0) && (
-                  
-                   <a href={`${API_BASE}/erp/ordenes/${venta.id}/productos/pdf-consolidado-preview?${items
-                      .map((it) => `codigos=${encodeURIComponent(it.codigo)}`)
-                      .join("&")}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 transition-colors"
-                  >
-                    <FileText size={12} />
-                    Ver PDF ({items.reduce((acc, it) => acc + (imagenesPorProducto[it.codigo] || []).length, 0)})
-                  </a>
-                )}
-              </div>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {items.map((it, idx) => (
-                <div key={it.codigo} className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-[13px] font-semibold text-slate-800 break-words leading-snug">
-                      <span style={{ fontFamily: "var(--font-mono)" }} className="text-[#4F46E5]">{it.codigo}</span>
-                      {" — "}
-                      {it.descripcion}
-                    </p>
-                    <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
-                      {idx + 1}/{items.length}
-                    </span>
-                  </div>
-                  <div
-                    className={`grid grid-cols-1 gap-3 ${
-                      compartido.tipo_envio === "AGENCIA" ? "sm:grid-cols-4" : "sm:grid-cols-3"
-                    }`}
-                  >
-                  <Campo label="Precio producto" value={it.precio_producto} onChange={(v) => actualizarItem(it.codigo, "precio_producto", v)} disabled={soloLectura} tipo="decimal" placeholder="0.00" />
-                    <Campo label="Comodato" value={it.comodato} onChange={(v) => actualizarItem(it.codigo, "comodato", v)} disabled={soloLectura} placeholder="-" />
-                    <Campo label="Observaciones externas" value={it.observaciones_externas} onChange={(v) => actualizarItem(it.codigo, "observaciones_externas", v)} disabled={soloLectura} placeholder="-" />
-                    {compartido.tipo_envio === "AGENCIA" && (
-                      <Campo label="Precio flete" value={it.precio_flete} onChange={(v) => actualizarItem(it.codigo, "precio_flete", v)} disabled={soloLectura} tipo="decimal" placeholder="0.00" />
-                    )}
-                    <SelectorImagenes
-                      ordenCompraId={Number(venta.id)}
-                      codigo={it.codigo}
-                      imagenes={imagenesPorProducto[it.codigo] || []}
-                      onCambio={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [it.codigo]: nuevas }))}
-                      disabled={soloLectura}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+              )}
+              renderBuscadorTransporte={() => (
+                <BuscadorEntidad<TransporteOption>
+                  label="Agencia de transporte"
+                  value={compartido.agencia_transporte}
+                  onChange={(v) => actualizarCompartido("agencia_transporte", v)}
+                  onSeleccionar={(t) => {
+                    actualizarCompartido("agencia_transporte", t.razonSocial);
+                    actualizarCompartido("transporte_id", String(t.id));
+                  }}
+                  opciones={transportes}
+                  cargando={false}
+                  disabled={soloLectura}
+                  placeholder="Buscar agencia de transporte..."
+                  seleccionado={transportes.find((t) => t.razonSocial === compartido.agencia_transporte) || null}
+                  onCrearNuevo={() => setModalTransporteAbierto(true)}
+                />
+              )}
+              renderContactoProveedor={() => (
+                <ContactoProveedorInfo proveedorId={compartido.proveedor_id ? parseInt(compartido.proveedor_id, 10) : null} />
+              )}
+              renderSelectorImagenes={(codigo) => (
+                <SelectorImagenes
+                  ordenCompraId={Number(venta.id)}
+                  codigo={codigo}
+                  imagenes={imagenesPorProducto[codigo] || []}
+                  onCambio={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
+                  disabled={soloLectura}
+                />
+              )}
+              cantidadImagenes={(codigo) => (imagenesPorProducto[codigo] || []).length}
+            />
 
           {faltantes.length > 0 && modo !== "ver" && (
             <p className="text-[11px] text-amber-600 flex items-start gap-1">
@@ -3409,6 +3355,25 @@ useEffect(() => {
   }, 800);
   return () => clearTimeout(t);
 }, [grupoInicial, seguimientos, cargarSeguimientos]);
+
+
+// Escape cierra lo que esté abierto encima, en orden: producto
+  // individual -> bloque -> panel de selección múltiple.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (productoAbierto) {
+        setProductoAbierto(null);
+      } else if (grupoBloqueAbierto) {
+        setGrupoBloqueAbierto(null);
+      } else if (panelBloqueAbierto) {
+        setPanelBloqueAbierto(false);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [productoAbierto, grupoBloqueAbierto, panelBloqueAbierto]);
+
 
 
 const segMap = Object.fromEntries(
@@ -4298,323 +4263,107 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
            
             </div>
 
-          {abierto && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-                <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => setProductoAbierto(null)} />
-                <div className="relative w-full max-w-[1500px] max-h-[92vh] overflow-y-auto bg-white rounded-2xl shadow-2xl">
-                  <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-800 truncate">{p.codigo}</p>
-                      <p className="text-[11px] text-slate-400 truncate">{p.descripcion}</p>
+              {abierto && (
+                opReal && !vinoDelFormulario ? (
+                  <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => setProductoAbierto(null)} />
+                    <div className="relative w-full max-w-[1500px] max-h-[92vh] overflow-y-auto bg-white rounded-2xl shadow-2xl">
+                      <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-800 truncate">{p.codigo}</p>
+                          <p className="text-[11px] text-slate-400 truncate">{p.descripcion}</p>
+                        </div>
+                        <button onClick={() => setProductoAbierto(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0">
+                          <X size={18} />
+                        </button>
+                      </div>
+                      <DetalleProductoErpReal op={opReal} producto={productoErpReal} />
                     </div>
-                    <button onClick={() => setProductoAbierto(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0">
-                      <X size={18} />
-                    </button>
                   </div>
-              {opReal && !vinoDelFormulario ? (
-                <DetalleProductoErpReal op={opReal} producto={productoErpReal} />
-              ) : (
-             <div className="p-6 space-y-3">
-
-                    {esSeguimiento && seg.grupo_envio_id && (() => {
-                      const grupo = seguimientos.filter((s: any) => s.grupo_envio_id === seg.grupo_envio_id);
-                      const totalFleteGrupo = grupo.reduce((acc, s: any) => acc + (Number(s.precio_flete) || 0), 0);
-                      const totalProductosGrupo = grupo.reduce((acc, s: any) => acc + (Number(s.precio_producto) || 0), 0);
-                      const grupoTienePendientes = grupo.some((s: any) => s.estado === "preview");
-                      return (
-                        <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 space-y-2">
-                          <p className="text-[11px] font-bold text-[#4F46E5] flex items-center gap-1">
-                            <Package size={11} /> Enviado en bloque junto con {grupo.length - 1} producto{grupo.length - 1 !== 1 ? "s" : ""} más
-                          </p>
-                          <p className="text-[10px] text-indigo-700">
-                            {grupo.map((s: any) => s.producto_codigo).join(", ")}
-                          </p>
-                          <div className="flex items-center gap-4 text-[10px] text-indigo-700 font-medium pt-1">
-                            <span>Total productos del bloque: S/ {totalProductosGrupo.toFixed(2)}</span>
-                            {seg.tipo_envio === "AGENCIA" && <span>Total flete del bloque: S/ {totalFleteGrupo.toFixed(2)}</span>}
-                          </div>
-
-                          {grupoTienePendientes && (
-                            <div className="pt-1.5 border-t border-indigo-200 space-y-2">
-                              <div>
-                                <label className="block text-[10px] font-medium text-indigo-700 mb-1">
-                                  Empresa para todo el bloque (opcional — si no eliges, cada uno conserva la suya)
-                                </label>
-                                <select
-                                  value={empresaBloqueSeleccionada[seg.grupo_envio_id] || ""}
-                                  onChange={(e) =>
-                                    setEmpresaBloqueSeleccionada((prev) => ({ ...prev, [seg.grupo_envio_id]: e.target.value }))
-                                  }
-                                  className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                                >
-                                  <option value="">Mantener empresa individual de cada producto</option>
-                                  {empresas.map((em) => (
-                                    <option key={em.id} value={em.id}>{em.razonSocial}</option>
-                                  ))}
-                                </select>
-                              </div>
-                                  <button
-                                onClick={() => {
-                                  setProductoAbierto(null);
-                                  setGrupoBloqueAbierto(seg.grupo_envio_id);
-                                }}
-                                className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-medium rounded-lg py-2 text-xs hover:bg-emerald-700 transition-colors"
-                              >
-                                <ShieldCheck size={13} /> Confirmar bloque completo ({grupo.length} productos)
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    <p className="text-[11px] text-slate-400">
-                        {p.cantidad} {p.unidadMedida}
-                    </p>
-
-                  <div className="space-y-4">
-
-                    <SeccionForm titulo="Proveedor" icono={Package} color="indigo">
-                        <BuscadorEntidad<ProveedorOption>
-                            label="Proveedor"
-                            value={form.proveedor_nombre}
-                            onChange={(v) => actualizarCampo(codigo, "proveedor_nombre", v)}
-                            onSeleccionar={(p) => {
-                              actualizarCampo(codigo, "proveedor_nombre", p.razonSocial);
-                              actualizarCampo(codigo, "proveedor_id", String(p.id));
-                              if (p.telefono) actualizarCampo(codigo, "proveedor_telefono", p.telefono);
-                            }}
-                            opciones={proveedores}
-                            cargando={cargandoProveedores}
-                            disabled={soloLectura}
-                            placeholder="Buscar proveedor por razón social..."
-                            seleccionado={proveedores.find((pv) => pv.razonSocial === form.proveedor_nombre) || null}
-                            onCrearNuevo={() => setModalProveedorPara(codigo)}
-                        />
-                        <ContactoProveedorInfo proveedorId={form.proveedor_id ? parseInt(form.proveedor_id, 10) : null} />
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-                          <Campo label="Teléfono proveedor" value={form.proveedor_telefono} onChange={(v) => actualizarCampo(codigo, "proveedor_telefono", v)} disabled={soloLectura} tipo="telefono" maxLength={20} placeholder="+51 937 119 045" />
-                          <Campo label="Precio producto" value={form.precio_producto} onChange={(v) => actualizarCampo(codigo, "precio_producto", v)} disabled={soloLectura} tipo="decimal" placeholder="0.00" />
-                        </div>
-                        <Campo label="Comodato" value={form.comodato} onChange={(v) => actualizarCampo(codigo, "comodato", v)} disabled={soloLectura} placeholder="-" />
-                        <Campo label="Observaciones externas" value={form.observaciones_externas} onChange={(v) => actualizarCampo(codigo, "observaciones_externas", v)} disabled={soloLectura} placeholder="-" />
-
-                        {/* Empresa — solo Seguimiento puede reasignarla;
-                            solo la ve informativa, ya precargada con la de la
-                            orden principal. Cambiar la empresa (aunque sea el
-                            mismo proveedor) separa el producto en otra OP. */}
-                        <div>
-                          <label className="block text-[11px] font-medium text-slate-500 mb-1">Empresa</label>
-                          <select
-                            value={form.empresa_id}
-                            disabled={!esSeguimiento || soloLectura || cargandoEmpresas}
-                            onChange={(e) => {
-                              const emp = empresas.find((em) => String(em.id) === e.target.value);
-                              actualizarCampo(codigo, "empresa_id", e.target.value);
-                              actualizarCampo(codigo, "empresa_nombre", emp?.razonSocial || "");
-                            }}
-                            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 disabled:bg-slate-50 disabled:text-slate-500"
-                          >
-                            <option value="">{cargandoEmpresas ? "Cargando empresas..." : "Selecciona empresa..."}</option>
-                            {empresas.map((em) => (
-                              <option key={em.id} value={em.id}>{em.razonSocial}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </SeccionForm>
-
-                      <SeccionForm titulo="Tipo de envío" icono={Truck} color="amber">
-                        <SelectorTipoEnvio
-                          value={form.tipo_envio}
-                          onChange={(v) => actualizarCampo(codigo, "tipo_envio", v)}
-                          onAutorellenar={(texto) => actualizarCampo(codigo, "observaciones", texto)}
-                          disabled={soloLectura}
-                        />
-                        {form.tipo_envio === "AGENCIA" && (
-                          <>
-                              <BuscadorEntidad<TransporteOption>
-                                label="Agencia transporte"
-                                value={form.agencia_transporte}
-                                onChange={(v) => actualizarCampo(codigo, "agencia_transporte", v)}
-                                onSeleccionar={(t) => {
-                                  actualizarCampo(codigo, "agencia_transporte", t.razonSocial);
-                                  actualizarCampo(codigo, "transporte_id", String(t.id));
-                                }}
-                                opciones={transportes}
-                                cargando={cargandoTransportes}
-                                disabled={soloLectura}
-                                placeholder="Buscar agencia de transporte..."
-                                seleccionado={transportes.find((tp) => tp.razonSocial === form.agencia_transporte) || null}
-                                onCrearNuevo={() => setModalTransportePara(codigo)}
-                            />
-                            <Campo label="Precio flete" value={form.precio_flete} onChange={(v) => actualizarCampo(codigo, "precio_flete", v)} disabled={soloLectura} tipo="decimal" placeholder="0.00" />
-                            <div>
-                              <label className="block text-[11px] font-medium text-slate-500 mb-1">Observaciones transporte</label>
-                              <textarea
-                                value={form.observaciones_transporte}
-                                disabled={soloLectura}
-                                placeholder="Nota específica para el transportista..."
-                                onChange={(e) => actualizarCampo(codigo, "observaciones_transporte", e.target.value)}
-                                rows={2}
-                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 disabled:bg-slate-50 disabled:text-slate-500"
-                              />
-                            </div>
-                          </>
-                        )}
-                      </SeccionForm>
-                    </div>
-
-                    <div className="space-y-3">
-                      <SeccionForm titulo="Observaciones" icono={MessageSquareText} color="violet">
-                        <CampoObservaciones value={form.observaciones} onChange={(v) => actualizarCampo(codigo, "observaciones", v)} disabled={soloLectura} />
-                        <div>
-                          <label className="block text-[11px] font-medium text-slate-500 mb-1">Otras observaciones</label>
-                          <textarea
-                            value={form.otras_observaciones}
-                            disabled={soloLectura}
-                            placeholder="Cualquier otra nota general para la OP..."
-                            onChange={(e) => actualizarCampo(codigo, "otras_observaciones", e.target.value)}
-                            rows={2}
-                            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 disabled:bg-slate-50 disabled:text-slate-500"
-                          />
-                        </div>
-                      </SeccionForm>
-
+                ) : (
+                  <FormularioProductoModal
+                    codigo={codigo}
+                    nombreProducto={p.codigo}
+                    descripcionProducto={p.descripcion}
+                    cantidad={cantidadMostrar}
+                    unidadMedida={p.unidadMedida}
+                    form={form}
+                    actualizarCampo={actualizarCampo}
+                    soloLectura={soloLectura}
+                    proveedores={proveedores}
+                    transportes={transportes}
+                    cargandoProveedores={cargandoProveedores}
+                    cargandoTransportes={cargandoTransportes}
+                    empresas={empresas}
+                    cargandoEmpresas={cargandoEmpresas}
+                    esSeguimiento={esSeguimiento}
+                    onCrearProveedor={() => setModalProveedorPara(codigo)}
+                    onCrearTransporte={() => setModalTransportePara(codigo)}
+                    ordenCompraId={Number(venta.id)}
+                    imagenes={imagenesPorProducto[codigo] || []}
+                    onCambiarImagenes={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
+                    estado={(seg.estado as "pendiente" | "preview" | "confirmado" | "subido") || "pendiente"}
+                    rellenadoPor={seg.rellenado_por}
+                    confirmadoPor={seg.confirmado_por}
+                    pdfConsolidadoUrl={seg.pdf_consolidado_url}
+                    guardando={guardandoCodigo === codigo}
+                    confirmando={confirmandoCodigo === codigo}
+                    actualizandoErp={actualizandoErpCodigo === codigo}
+                    onEnviarParaRevision={() => guardarProducto(codigo)}
+                    onGuardarCambios={() => guardarCambiosSeguimientoForm(codigo)}
+                    onConfirmar={() => confirmarProductoForm(codigo)}
+                    onActualizarErp={() => actualizarEnErpForm(codigo)}
+                    onCerrar={() => setProductoAbierto(null)}
+                    renderBuscadorProveedor={() => (
+                      <BuscadorEntidad<ProveedorOption>
+                        label="Proveedor"
+                        value={form.proveedor_nombre}
+                        onChange={(v) => actualizarCampo(codigo, "proveedor_nombre", v)}
+                        onSeleccionar={(prov) => {
+                          actualizarCampo(codigo, "proveedor_nombre", prov.razonSocial);
+                          actualizarCampo(codigo, "proveedor_id", String(prov.id));
+                          if (prov.telefono) actualizarCampo(codigo, "proveedor_telefono", prov.telefono);
+                        }}
+                        opciones={proveedores}
+                        cargando={cargandoProveedores}
+                        disabled={soloLectura}
+                        placeholder="Buscar proveedor por razón social..."
+                        seleccionado={proveedores.find((pv) => pv.razonSocial === form.proveedor_nombre) || null}
+                        onCrearNuevo={() => setModalProveedorPara(codigo)}
+                      />
+                    )}
+                    renderBuscadorTransporte={() => (
+                      <BuscadorEntidad<TransporteOption>
+                        label="Agencia transporte"
+                        value={form.agencia_transporte}
+                        onChange={(v) => actualizarCampo(codigo, "agencia_transporte", v)}
+                        onSeleccionar={(t) => {
+                          actualizarCampo(codigo, "agencia_transporte", t.razonSocial);
+                          actualizarCampo(codigo, "transporte_id", String(t.id));
+                        }}
+                        opciones={transportes}
+                        cargando={cargandoTransportes}
+                        disabled={soloLectura}
+                        placeholder="Buscar agencia de transporte..."
+                        seleccionado={transportes.find((tp) => tp.razonSocial === form.agencia_transporte) || null}
+                        onCrearNuevo={() => setModalTransportePara(codigo)}
+                      />
+                    )}
+                    renderContactoProveedor={() => (
+                      <ContactoProveedorInfo proveedorId={form.proveedor_id ? parseInt(form.proveedor_id, 10) : null} />
+                    )}
+                    renderSelectorImagenes={() => (
                       <SelectorImagenes
                         ordenCompraId={Number(venta.id)}
                         codigo={codigo}
                         imagenes={imagenesPorProducto[codigo] || []}
-                        onCambio={(nuevas) =>
-                          setImagenesPorProducto((prev) => ({
-                            ...prev,
-                            [codigo]: nuevas,
-                          }))
-                        }
+                        onCambio={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
                         disabled={soloLectura}
                       />
-
-                      {seg.pdf_consolidado_url && !(esSeguimiento && (seg.estado === "confirmado" || seg.estado === "subido")) && (
-                        
-                        <a  href={seg.pdf_consolidado_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="flex items-center justify-center gap-2 w-full bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 font-medium rounded-lg py-2 text-xs transition-colors"
-                        >
-                          <FileText size={13} />
-                          Ver PDF consolidado
-                        </a>
-                      )}
-                    </div>
-
-                    <div className="sticky bottom-0 z-20 space-y-3 rounded-xl border border-slate-200 border-l-4 border-l-slate-400 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)] p-3.5">
-                      <p className="text-[13px] font-bold text-slate-800 tracking-wide pb-2 border-b border-slate-200">Acciones</p>
-                      <div className="space-y-2">
-                    {!esSeguimiento && (seg.estado === "pendiente" || seg.estado === "preview") && (
-                      <>
-                        {seg.estado === "preview" && (
-                          <p className="text-[11px] text-amber-600 text-center">
-                            Ya enviaste estos datos{seg.rellenado_por ? ` (${seg.rellenado_por})` : ""}. Puedes seguir
-                            editando y reenviar mientras seguimiento no lo confirme.
-                          </p>
-                        )}
-                        <CamposFaltantesAviso form={form} />
-                        <button
-                            onClick={() => guardarProducto(codigo)}
-                            disabled={guardandoCodigo === codigo}
-                            className="w-full flex items-center justify-center gap-2 bg-[#10172A] text-white rounded-lg py-2 text-xs disabled:opacity-40"
-                        >
-                            {guardandoCodigo === codigo ? (
-                                <Loader2 size={13} className="animate-spin" />
-                            ) : (
-                                <Send size={13} />
-                            )}
-                            {seg.estado === "preview" ? "Actualizar y reenviar" : "Enviar para revisión"}
-                        </button>
-                      </>
                     )}
-                    {!esSeguimiento && seg.estado === "confirmado" && (
-                      <p className="text-[11px] text-slate-400 text-center">
-                        Seguimiento ya confirmó estos datos. Ya no se pueden editar.
-                      </p>
-                    )}
-
-                    {esSeguimiento && seg.estado === "pendiente" && (
-                      <p className="text-[11px] text-slate-400 text-center">El proveedor aún no llenó estos datos.</p>
-                    )}
-
-                    {esSeguimiento && seg.estado === "preview" && (
-                      <div className="space-y-2">
-                        {seg.rellenado_por && (
-                          <p className="text-[11px] text-slate-400 text-center">
-                            Rellenado por: {seg.rellenado_por}
-                          </p>
-                        )}
-                        <button
-                          onClick={() => guardarCambiosSeguimientoForm(codigo)}
-                          disabled={guardandoCodigo === codigo || confirmandoCodigo === codigo}
-                          className="w-full flex items-center justify-center gap-2 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg py-2 text-xs disabled:opacity-40 hover:bg-slate-50 transition-colors"
-                        >
-                          {guardandoCodigo === codigo ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-                          Guardar cambios
-                        </button>
-                        <button
-                          onClick={() => confirmarProductoForm(codigo)}
-                          disabled={confirmandoCodigo === codigo}
-                          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-medium rounded-lg py-2 text-xs disabled:opacity-40 hover:bg-emerald-700 transition-colors"
-                        >
-                          {confirmandoCodigo === codigo ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
-                          Confirmado por seguimiento
-                        </button>
-                      </div>
-                    )}
-
-                        {esSeguimiento && (seg.estado === "confirmado" || seg.estado === "subido") && (
-                      <div className={`grid gap-2 ${seg.pdf_consolidado_url ? "grid-cols-3" : "grid-cols-2"}`}>
-                        <button
-                          onClick={() => guardarCambiosSeguimientoForm(codigo)}
-                          disabled={guardandoCodigo === codigo || actualizandoErpCodigo === codigo}
-                          className="flex items-center justify-center gap-1.5 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg py-2 text-[11px] disabled:opacity-40 hover:bg-slate-50 transition-colors"
-                        >
-                          {guardandoCodigo === codigo ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                          Guardar cambios
-                        </button>
-                        <button
-                          onClick={() => actualizarEnErpForm(codigo)}
-                          disabled={actualizandoErpCodigo === codigo}
-                          className="flex items-center justify-center gap-1.5 bg-indigo-600 text-white font-medium rounded-lg py-2 text-[11px] disabled:opacity-40 hover:bg-indigo-700 transition-colors"
-                        >
-                          {actualizandoErpCodigo === codigo ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                          Actualizar ERP
-                        </button>
-                        {seg.pdf_consolidado_url && (
-
-                          <a
-                          
-                            href={seg.pdf_consolidado_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="flex items-center justify-center gap-1.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 font-medium rounded-lg py-2 text-[11px] transition-colors"
-                          >
-                            <FileText size={12} />
-                            Ver PDF
-                          </a>
-                        )}
-                      </div>
-                    )}
-                    {seg.estado === "confirmado" && (
-                      <p className="text-[11px] text-[#4F46E5] text-center flex items-center justify-center gap-1">
-                        <ShieldCheck size={12} /> Confirmado por seguimiento{seg.confirmado_por ? ` (${seg.confirmado_por})` : ""}
-                      </p>
-                    )}
-                      </div>
-                    </div>
-                  </div>
+                  />
+                )
               )}
-                </div>
-              </div>
-            )}
                   </div>
               </Fragment>
             );

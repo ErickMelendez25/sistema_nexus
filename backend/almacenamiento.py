@@ -51,7 +51,7 @@ class AlmacenamientoLocal(AlmacenamientoBase):
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         # Debe apuntar a la misma URL pública que usa el frontend para
         # llegar a este backend (NEXT_PUBLIC_HELBOT_API en el .env del front).
-        self.api_base = os.getenv("HELBOT_API_PUBLIC", "http://localhost:4001")
+        self.api_base = os.getenv("HELBOT_API_PUBLIC", "http://localhost:4002")
 
     def guardar(self, contenido: bytes, extension: str, prefijo: str) -> str:
         nombre_unico = f"{prefijo}_{uuid.uuid4().hex}{extension}"

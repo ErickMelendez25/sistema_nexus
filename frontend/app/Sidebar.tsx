@@ -155,7 +155,14 @@ const esCobranzas = rol === "cobranzas";
 
   const peruActivo = estadosPeru[uidViendo]?.autenticado ?? false;
   const estadoPeruViendo = estadosPeru[uidViendo]?.estado;
-  const reconectandoPeru = estadoPeruViendo === "perdida" || estadoPeruViendo === "cargando";
+  // Solo "cargando" es un reintento automático EN CURSO por el backend.
+  // "perdida" significa que el backend YA agotó sus reintentos, cerró
+  // Chrome y limpió el perfil (mismo concepto que "fallo" en
+  // esperarAutenticado de EquipoVentasOperaciones.tsx) — desde ahí hace
+  // falta que el usuario vuelva a loguearse manualmente, así que ya NO
+  // debe quedarse en el loader infinito.
+  const reconectandoPeru = estadoPeruViendo === "cargando";
+  const sesionPerdida = estadoPeruViendo === "perdida";
 
   const contenidoSidebar = (
     <div
@@ -259,10 +266,12 @@ const esCobranzas = rol === "cobranzas";
                 <button
                   onClick={() => onLoginPeru(uidViendo)}
                   disabled={cargandoPeru || !uidViendo}
-                  title="Iniciar sesión Perú Compras"
-                  className={`flex items-center justify-center gap-1.5 rounded-md text-[11px] font-medium bg-white/10 hover:bg-white/20 text-white transition-colors disabled:opacity-50 shrink-0 ${
-                    colapsado ? "w-full h-8" : "px-2.5 py-1.5"
-                  }`}
+                  title={sesionPerdida ? "Sesión perdida — clic para iniciar sesión de nuevo" : "Iniciar sesión Perú Compras"}
+                  className={`flex items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors disabled:opacity-50 shrink-0 ${
+                    sesionPerdida
+                      ? "bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-400/20"
+                      : "bg-white/10 hover:bg-white/20 text-white"
+                  } ${colapsado ? "w-full h-8" : "px-2.5 py-1.5"}`}
                 >
                   {cargandoPeru ? <Loader2 size={13} className="animate-spin" /> : <LogIn size={13} />}
                   {!colapsado && "Entrar"}

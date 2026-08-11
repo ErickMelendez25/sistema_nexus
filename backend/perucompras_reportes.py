@@ -35,6 +35,50 @@ PARES_COLORES = [
     ("00B0F0", "D9F2FF"), ("FF66CC", "FFD9F2"),
 ]
 
+# ==========================================================
+# ORDEN DE COLUMNAS PARA LOS EXCEL EXPORTADOS
+# ----------------------------------------------------------
+# Pedido por el usuario de extracción. En MySQL las columnas NO cambian,
+# esto solo reordena lo que se escribe en el .xlsx.
+# ==========================================================
+ORDEN_COLUMNAS_EXCEL = [
+    "N°", "FECHA_GUARDADO", "REQUERIMIENTO", "PROFORMA", "N_PROFORMA_ID",
+    "N_ENTIDAD_SEMAFORO", "COLOR_SEMAFORO", "PROCEDIMIENTO", "FECHA_EMISION",
+    "FECHA_LIMITE_COTIZACION", "ENTIDAD", "RUC", "PRODUCTO", "FICHA_PRODUCTO",
+    "MARCA", "CODIGO_UNICO", "CANTIDAD", "PRECIO_UNITARIO_BASE",
+    "PRECIO_OFERTADO", "MONEDA", "DIRECCION_ENTREGA", "DEPARTAMENTO",
+    "PROVINCIA", "DISTRITO", "FECHA_INICIO_ENTREGA", "FECHA_FIN_ENTREGA",
+    "PLAZO_DIAS", "SUBTOTAL", "COSTO_PRODUCTOS", "COSTO_ENVIO", "IGV",
+    "PDF_PRODUCTO", "PDF_REQUERIMIENTO", "IMAGEN_PRODUCTO",
+    # No venían en la lista pedida — se dejan al final para no perder el
+    # dato. Si no se quieren en el Excel, se borran de aquí.
+    "ESTADO", "UID_PERUCOMPRAS", "DETALLE_ENTREGA_ID",
+]
+
+# Mismo orden pero con los nombres reales de columna en MySQL (minúsculas),
+# usado solo en generar_excel_historial_acumulado (que lee con SELECT *).
+ORDEN_COLUMNAS_DB = [
+    "id", "fecha_guardado", "requerimiento", "proforma", "n_proforma_id",
+    "n_entidad_semaforo", "color_semaforo", "procedimiento", "fecha_emision",
+    "fecha_limite_cotizacion", "entidad", "ruc", "producto", "ficha_producto",
+    "marca", "codigo_unico", "cantidad", "precio_unitario_base",
+    "precio_ofertado", "moneda", "direccion_entrega", "departamento",
+    "provincia", "distrito", "fecha_inicio_entrega", "fecha_fin_entrega",
+    "plazo_dias", "subtotal", "costo_productos", "costo_envio", "igv",
+    "pdf_producto", "pdf_requerimiento", "imagen_producto",
+    "estado", "uid_perucompras", "detalle_entrega_id", "catalogo",
+    "ficha_hash", "prod_idx", "pf_idx", "det_idx",
+]
+
+
+def _reordenar_columnas(df: pd.DataFrame, orden: list[str]) -> pd.DataFrame:
+    """Reordena columnas de df según `orden`. Lo que esté en `orden` pero
+    no exista en df se ignora (no truena). Lo que df tenga y no esté en
+    `orden` se agrega al final, para nunca perder datos por descuadre
+    entre esta lista y la tabla real."""
+    cols_presentes = [c for c in orden if c in df.columns]
+    cols_extra = [c for c in df.columns if c not in orden]
+    return df[cols_presentes + cols_extra]
 
 def obtener_marcas_config(uid: str = "") -> dict[str, set[str]]:
     conn = get_conn()
@@ -169,6 +213,7 @@ def generar_excel_historial(catalogos_registros: dict[str, list[dict]]) -> str |
             if not registros:
                 continue
             df = pd.DataFrame(registros).drop(columns=["_id"], errors="ignore")
+            df = _reordenar_columnas(df, ORDEN_COLUMNAS_EXCEL)
             df.to_excel(writer, sheet_name=catalogo[:31], index=False)
 
     logger.info(f"generar_excel_historial: guardado en {ruta}")
@@ -208,6 +253,7 @@ def generar_excel_historial_acumulado(uid: str) -> str | None:
                     if not filas:
                         continue
                     df = pd.DataFrame(filas)
+                    df = _reordenar_columnas(df, ORDEN_COLUMNAS_DB)
                     df.to_excel(writer, sheet_name=catalogo[:31], index=False)
                     hubo_contenido = True
 

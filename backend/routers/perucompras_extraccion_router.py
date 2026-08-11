@@ -105,14 +105,38 @@ def estado_extraccion():
 @router.get("/runs")
 def listar_runs(
     uid: str = "",
+    buscar: str = "",
+    estado: str = "",
+    desde: str = "",
+    hasta: str = "",
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(10, ge=1, le=100),
 ):
     """Auditoría: quién extrajo, cuándo, con qué usuario de Perú Compras,
     y el desglose de filas por catálogo en esa corrida — paginado.
-    Filtrado por uid_perucompras cuando se especifica."""
-    where_sql = "WHERE uid_perucompras = %s" if uid else ""
-    params_where = [uid] if uid else []
+    Filtros: uid_perucompras exacto, texto libre (usuario_helbot o
+    uid_perucompras), estado de la corrida, y rango de fechas sobre
+    iniciado_en."""
+    where = ["1=1"]
+    params_where: list = []
+
+    if uid:
+        where.append("uid_perucompras = %s")
+        params_where.append(uid)
+    if buscar:
+        where.append("(usuario_helbot LIKE %s OR uid_perucompras LIKE %s)")
+        params_where.extend([f"%{buscar}%", f"%{buscar}%"])
+    if estado:
+        where.append("estado = %s")
+        params_where.append(estado)
+    if desde:
+        where.append("iniciado_en >= %s")
+        params_where.append(f"{desde} 00:00:00")
+    if hasta:
+        where.append("iniciado_en <= %s")
+        params_where.append(f"{hasta} 23:59:59")
+
+    where_sql = "WHERE " + " AND ".join(where)
 
     conn = get_conn()
     try:
