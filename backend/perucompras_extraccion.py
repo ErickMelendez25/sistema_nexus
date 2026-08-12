@@ -716,7 +716,7 @@ def obtener_catalogos_mysql(session, progreso: dict | None = None, pc_session_re
                                     "N_PROFORMA_ID": proforma_id,   # 👈 AGREGA ESTA LINEA
                                     "N_ENTIDAD_SEMAFORO": semaforo_valor,
                                     "COLOR_SEMAFORO": semaforo_color,
-                                    "ESTADO": item.get("C_Estado") or "",
+                                    "ESTADO": (item.get("C_Estado") or "")[:30],
                            
                                     "PROCEDIMIENTO": obj.get("C_Procedimiento",""),
                                     "FECHA_EMISION": item.get("C_FechaEmision",""),
@@ -867,7 +867,7 @@ def obtener_catalogos_mysql(session, progreso: dict | None = None, pc_session_re
                                         "N_PROFORMA_ID": proforma_id,
                                         "N_ENTIDAD_SEMAFORO": semaforo_valor,
                                         "COLOR_SEMAFORO": semaforo_color,
-                                        "ESTADO": item.get("C_Estado") or "",
+                                        "ESTADO": (item.get("C_Estado") or "")[:30],
                            
                                         "PROCEDIMIENTO": obj.get("C_Procedimiento",""),
                                         "FECHA_EMISION": item.get("C_FechaEmision",""),
