@@ -154,16 +154,14 @@ def guardar_restringidos_mysql(run_id: int | None, catalogo: str, filas: list[di
                 cur.execute(
                     """
                     INSERT IGNORE INTO perucompras_restringidos
-                        (run_id, extraccion_id, catalogo, motivo, marca, subtotal)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (run_id, extraccion_id, catalogo, motivo, marca, subtotal, estado)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (run_id, f["extraccion_id"], catalogo, f["motivo"], f["marca"], f["subtotal"]),
+                    (run_id, f["extraccion_id"], catalogo, f["motivo"], f["marca"], f["subtotal"], "pendiente"),
                 )
         conn.commit()
     finally:
         conn.close()
-
-
 
 def clasificar_marcas_objetivo(registros_con_id: list[dict], marcas_config: dict[str, set[str]]) -> list[dict]:
     """Filas cuya marca está en la lista 'objetivo' — mismo criterio que

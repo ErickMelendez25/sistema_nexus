@@ -238,12 +238,12 @@ export default function FormularioBloqueModal({
             </div>
             <div className="rounded-lg bg-white border border-slate-200 px-3 py-2.5">
               <p className="text-[10px] text-slate-400 uppercase font-semibold">Total productos</p>
-              <p className="text-sm font-bold text-emerald-700">S/ {totalProductos.toFixed(2)}</p>
+              <p className="text-sm font-bold text-emerald-700">S/ {totalProductos.toFixed(5)}</p>
             </div>
             {compartido.tipo_envio === "AGENCIA" && (
               <div className="rounded-lg bg-white border border-slate-200 px-3 py-2.5 col-span-2">
                 <p className="text-[10px] text-slate-400 uppercase font-semibold">Total flete</p>
-                <p className="text-sm font-bold text-slate-800">S/ {totalFlete.toFixed(2)}</p>
+                <p className="text-sm font-bold text-slate-800">S/ {totalFlete.toFixed(5)}</p>
               </div>
             )}
           </div>
@@ -293,7 +293,7 @@ export default function FormularioBloqueModal({
                 <span style={{ fontFamily: "var(--font-mono)" }}>{it.codigo}</span>
                 {it.precio_producto && (
                   <span className={activo ? "text-white/90" : "text-emerald-700"}>
-                    S/ {Number(it.precio_producto).toFixed(2)}
+                    S/ {Number(it.precio_producto).toFixed(5)}
                   </span>
                 )}
                 {nImg > 0 && (
