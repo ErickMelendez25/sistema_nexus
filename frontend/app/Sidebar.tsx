@@ -129,6 +129,10 @@ export default function Sidebar({
   const [colapsado, setColapsado] = useState(false);
   const [abiertoMovil, setAbiertoMovil] = useState(false);
 
+
+  const [modalCerrarSesion, setModalCerrarSesion] = useState(false);
+  const [cerrandoSesion, setCerrandoSesion] = useState(false);
+
   // NUEVO: control del grupo desplegable "Cobranzas"
 // NUEVO: control del grupo desplegable "Cobranzas"
   const [cobranzasAbierto, setCobranzasAbierto] = useState(
@@ -164,6 +168,21 @@ const esCobranzas = rol === "cobranzas";
   const reconectandoPeru = estadoPeruViendo === "cargando";
   const sesionPerdida = estadoPeruViendo === "perdida";
 
+
+
+
+  const manejarConfirmarCierre = async () => {
+    setCerrandoSesion(true);
+    // Delay mínimo para que el loader se sienta intencional y no un parpadeo,
+    // aunque onCerrarSesion resuelva casi instantáneo.
+    await Promise.all([
+      Promise.resolve(onCerrarSesion()),
+      new Promise((r) => setTimeout(r, 700)),
+    ]);
+    setCerrandoSesion(false);
+    setModalCerrarSesion(false);
+  };
+
   const contenidoSidebar = (
     <div
       className={`flex flex-col h-full bg-[#10172A] text-slate-200 transition-all duration-200 ${
@@ -171,20 +190,23 @@ const esCobranzas = rol === "cobranzas";
       }`}
     >
       {/* Marca + colapsar */}
-      <div className="flex items-center justify-between h-16 px-4 border-b border-white/10 shrink-0">
-        <div className="flex items-center gap-2.5 overflow-hidden">
-          <div className="w-8 h-8 rounded-lg bg-[#4F46E5] flex items-center justify-center shrink-0">
-            <ShieldCheck size={16} className="text-white" strokeWidth={2} />
-          </div>
-          {!colapsado && (
-            <span style={{ fontFamily: "var(--font-display)" }} className="text-sm font-semibold text-white whitespace-nowrap">
-              Nexus RPC
-            </span>
-          )}
+      <div className="flex items-center justify-between h-16 px-4 border-b border-white/10 shrink-0 bg-white">
+        <div className={`flex items-center overflow-hidden ${colapsado ? "justify-center w-full" : "gap-2"}`}>
+          <img
+            src="/logo-rpc.png"
+            alt="Grupo RPC"
+            width={colapsado ? 32 : 120}
+            height={32}
+            style={{ objectFit: "contain", display: "block" }}
+            className="shrink-0"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
         </div>
         <button
           onClick={() => setColapsado((v) => !v)}
-          className="hidden md:flex p-1.5 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-colors shrink-0"
+          className="hidden md:flex p-1.5 rounded-md hover:bg-slate-100 text-slate-500 hover:text-[#1B2A4E] transition-colors shrink-0"
           aria-label="Colapsar menú"
         >
           {colapsado ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
@@ -327,7 +349,7 @@ const esCobranzas = rol === "cobranzas";
         <button
           onClick={onTogglePanelNotis}
           title="Notificaciones"
-          className={`flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-[13px] font-medium text-slate-400 hover:bg-white/5 hover:text-slate-200 transition-colors relative ${
+          className={`flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-[13px] font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-colors relative ${
             colapsado ? "justify-center" : ""
           }`}
         >
@@ -354,12 +376,12 @@ const esCobranzas = rol === "cobranzas";
             title={t.label}
             className={`flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors relative ${
               tabActivo === t.id
-                ? "bg-[#4F46E5]/20 text-white border border-[#4F46E5]/40"
-                : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                ? "bg-gradient-to-r from-[#C9A227]/25 to-[#C9A227]/10 text-white border-l-[3px] border-l-[#C9A227] border-y border-y-white/5 border-r-0 shadow-[0_0_12px_-2px_rgba(201,162,39,0.35)]"
+                : "text-slate-300 hover:bg-white/10 hover:text-white"
             } ${colapsado ? "justify-center" : ""}`}
           >
             <span className="relative shrink-0">
-              <t.icon size={17} strokeWidth={2} />
+              <t.icon size={17} strokeWidth={2} className={tabActivo === t.id ? "text-[#C9A227]" : ""} />
               {/* El badge de no leídos del chat se oculta mientras el
                   usuario YA está parado en el tab de chat — el total
                   "desaparece" al entrar, pero los no leídos por
@@ -381,7 +403,7 @@ const esCobranzas = rol === "cobranzas";
           <button
             onClick={() => setCobranzasAbierto((v) => !v)}
             title="Cobranzas"
-            className={`flex items-center w-full rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors text-slate-400 hover:bg-white/5 hover:text-slate-200 ${
+            className={`flex items-center w-full rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors text-slate-300 hover:bg-white/10 hover:text-white ${
               colapsado ? "justify-center" : "justify-between"
             }`}
           >
@@ -404,11 +426,11 @@ const esCobranzas = rol === "cobranzas";
                 title="Doc para pago"
                 className={`flex items-center gap-3 w-full rounded-lg px-3 py-2 text-[12.5px] font-medium transition-colors ${
                   tabActivo === "cobranzas-doc-pago"
-                    ? "bg-[#4F46E5]/20 text-white border border-[#4F46E5]/40"
-                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                    ? "bg-gradient-to-r from-[#C9A227]/25 to-[#C9A227]/10 text-white border-l-[3px] border-l-[#C9A227] border-y border-y-white/5 border-r-0 shadow-[0_0_12px_-2px_rgba(201,162,39,0.35)]"
+                    : "text-slate-300 hover:bg-white/10 hover:text-white"
                 } ${colapsado ? "justify-center" : ""}`}
               >
-                <FileText size={15} strokeWidth={2} className="shrink-0" />
+                <FileText size={15} strokeWidth={2} className={`shrink-0 ${tabActivo === "cobranzas-doc-pago" ? "text-[#C9A227]" : ""}`} />
                 {!colapsado && <span className="truncate">Doc para pago</span>}
               </button>
 
@@ -417,11 +439,11 @@ const esCobranzas = rol === "cobranzas";
                 title="Carta nota débito"
                 className={`flex items-center gap-3 w-full rounded-lg px-3 py-2 text-[12.5px] font-medium transition-colors ${
                   tabActivo === "cobranzas-carta-nota"
-                    ? "bg-[#4F46E5]/20 text-white border border-[#4F46E5]/40"
-                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                    ? "bg-gradient-to-r from-[#C9A227]/25 to-[#C9A227]/10 text-white border-l-[3px] border-l-[#C9A227] border-y border-y-white/5 border-r-0 shadow-[0_0_12px_-2px_rgba(201,162,39,0.35)]"
+                    : "text-slate-300 hover:bg-white/10 hover:text-white"
                 } ${colapsado ? "justify-center" : ""}`}
               >
-                <FileSignature size={15} strokeWidth={2} className="shrink-0" />
+                <FileSignature size={15} strokeWidth={2} className={`shrink-0 ${tabActivo === "cobranzas-carta-nota" ? "text-[#C9A227]" : ""}`} />
                 {!colapsado && <span className="truncate">Carta nota débito</span>}
               </button>
             </div>
@@ -437,7 +459,7 @@ const esCobranzas = rol === "cobranzas";
           <button
             onClick={() => setEquipoVentasAbierto((v) => !v)}
             title="Equipo Ventas"
-            className={`flex items-center w-full rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors text-slate-400 hover:bg-white/5 hover:text-slate-200 ${
+            className={`flex items-center w-full rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors text-slate-300 hover:bg-white/10 hover:text-white ${
               colapsado ? "justify-center" : "justify-between"
             }`}
           >
@@ -460,11 +482,11 @@ const esCobranzas = rol === "cobranzas";
                 title="Operaciones"
                 className={`flex items-center gap-3 w-full rounded-lg px-3 py-2 text-[12.5px] font-medium transition-colors ${
                   tabActivo === "equipo-ventas-operaciones"
-                    ? "bg-[#4F46E5]/20 text-white border border-[#4F46E5]/40"
-                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                    ? "bg-gradient-to-r from-[#C9A227]/25 to-[#C9A227]/10 text-white border-l-[3px] border-l-[#C9A227] border-y border-y-white/5 border-r-0 shadow-[0_0_12px_-2px_rgba(201,162,39,0.35)]"
+                    : "text-slate-300 hover:bg-white/10 hover:text-white"
                 } ${colapsado ? "justify-center" : ""}`}
               >
-                <Briefcase size={15} strokeWidth={2} className="shrink-0" />
+                <Briefcase size={15} strokeWidth={2} className={`shrink-0 ${tabActivo === "equipo-ventas-operaciones" ? "text-[#C9A227]" : ""}`} />
                 {!colapsado && <span className="truncate">Operaciones</span>}
               </button>
 
@@ -474,11 +496,11 @@ const esCobranzas = rol === "cobranzas";
                   title="Big Data"
                   className={`flex items-center gap-3 w-full rounded-lg px-3 py-2 text-[12.5px] font-medium transition-colors ${
                     tabActivo === "equipo-ventas-bigdata"
-                      ? "bg-[#4F46E5]/20 text-white border border-[#4F46E5]/40"
-                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                      ? "bg-gradient-to-r from-[#C9A227]/25 to-[#C9A227]/10 text-white border-l-[3px] border-l-[#C9A227] border-y border-y-white/5 border-r-0 shadow-[0_0_12px_-2px_rgba(201,162,39,0.35)]"
+                      : "text-slate-300 hover:bg-white/10 hover:text-white"
                   } ${colapsado ? "justify-center" : ""}`}
                 >
-                  <PieChart size={15} strokeWidth={2} className="shrink-0" />
+                  <PieChart size={15} strokeWidth={2} className={`shrink-0 ${tabActivo === "equipo-ventas-bigdata" ? "text-[#C9A227]" : ""}`} />
                   {!colapsado && <span className="truncate">Big Data</span>}
                 </button>
               )}
@@ -508,10 +530,10 @@ const esCobranzas = rol === "cobranzas";
             </div>
           )}
         </button>
-        <button
-          onClick={onCerrarSesion}
+          <button
+          onClick={() => setModalCerrarSesion(true)}
           title="Cerrar sesión"
-          className={`flex items-center gap-2 w-full mt-1 rounded-lg px-2 py-2 text-[11px] font-medium text-slate-400 hover:text-red-400 hover:bg-white/5 transition-colors ${
+          className={`flex items-center gap-2 w-full mt-1 rounded-lg px-2 py-2 text-[11px] font-medium text-slate-300 hover:text-red-400 hover:bg-red-500/10 transition-colors ${
             colapsado ? "justify-center" : ""
           }`}
         >
@@ -550,6 +572,53 @@ const esCobranzas = rol === "cobranzas";
         <div className="md:hidden fixed inset-0 z-50">
           <div className="absolute inset-0 bg-slate-950/60" onClick={() => setAbiertoMovil(false)} />
           <div className="absolute top-0 left-0 h-full">{contenidoSidebar}</div>
+        </div>
+      )}
+
+
+
+      
+ {/* Modal confirmación cerrar sesión */}
+      {modalCerrarSesion && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            onClick={() => !cerrandoSesion && setModalCerrarSesion(false)}
+          />
+          <div className="relative w-full max-w-sm bg-[#10172A] border border-white/10 rounded-2xl shadow-2xl p-6 animate-[fadeIn_0.15s_ease-out]">
+            <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-4">
+              <LogOut size={20} className="text-red-400" />
+            </div>
+            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-base font-semibold text-white mb-1.5">
+              ¿Cerrar sesión?
+            </h3>
+            <p className="text-[13px] text-slate-400 leading-relaxed mb-6">
+              Vas a salir de tu cuenta en Nexus RPC. Tendrás que iniciar sesión de nuevo para continuar.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setModalCerrarSesion(false)}
+                disabled={cerrandoSesion}
+                className="flex-1 py-2.5 rounded-lg text-[13px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={manejarConfirmarCierre}
+                disabled={cerrandoSesion}
+                className="flex-1 py-2.5 rounded-lg text-[13px] font-semibold text-white bg-red-500 hover:bg-red-600 transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
+              >
+                {cerrandoSesion ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Cerrando...
+                  </>
+                ) : (
+                  "Sí, cerrar sesión"
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

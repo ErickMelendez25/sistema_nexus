@@ -8,7 +8,7 @@ import {
 import { VentaErp, OpResumen, ocamDe, codigoVentaDe } from "./TabVentasErp";
 import { EmpresaOption, listarEmpresas, contactosDeProveedor, crearContactoProveedor, ContactoProveedor } from "./erp-shared";
 
-import FormularioProductoModal from "./FormularioProductoModal";
+import FormularioProductoModal, { VisorDocumentos, nombreDesdeUrl } from "./FormularioProductoModal";
 
 import FormularioBloqueModal from "./FormularioBloqueModal";
 
@@ -2322,6 +2322,64 @@ function DetalleProductoErpReal({ op, producto }: { op: any; producto: any }) {
 }
 
 
+
+
+// Envuelve DetalleProductoErpReal (el resumen de solo lectura de una OP
+// ya creada directo en el ERP) con el mismo visor OCE/OCF de dos
+// columnas que usa FormularioProductoModal — así también se ve el
+// documento en productos que nunca pasaron por el flujo de Helbot.
+function ModalDetalleProductoErpReal({
+  p,
+  opReal,
+  productoErpReal,
+  urlOce,
+  urlOcf,
+  onCerrar,
+}: {
+  p: any;
+  opReal: any;
+  productoErpReal: any;
+  urlOce?: string | null;
+  urlOcf?: string | null;
+  onCerrar: () => void;
+}) {
+  const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={onCerrar} />
+      <div className="relative w-full max-w-[1800px] h-[92vh] overflow-hidden bg-white rounded-2xl shadow-2xl flex flex-col">
+        <div className="shrink-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-800 truncate">{p.codigo}</p>
+            <p className="text-[11px] text-slate-400 truncate">{p.descripcion}</p>
+          </div>
+          <button onClick={onCerrar} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col xl:flex-row gap-3 p-5 overflow-hidden">
+          <div className="flex-1 min-w-0 overflow-y-auto pr-1">
+            <DetalleProductoErpReal op={opReal} producto={productoErpReal} />
+          </div>
+          {(urlOce || urlOcf) && (
+            <div className="w-full xl:w-[600px] shrink-0 h-full">
+              <VisorDocumentos
+                docActivo={docActivo}
+                onCambiarDoc={setDocActivo}
+                urlOce={urlOce ?? null}
+                urlOcf={urlOcf ?? null}
+                nombreOce={urlOce ? nombreDesdeUrl(urlOce) : null}
+                nombreOcf={urlOcf ? nombreDesdeUrl(urlOcf) : null}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 const ACENTOS_SECCION: Record<string, { icono: string; borde: string }> = {
   indigo: { icono: "bg-[#4F46E5]/10 text-[#4F46E5]", borde: "border-l-4 border-l-[#4F46E5]" },
   amber: { icono: "bg-amber-100 text-amber-600", borde: "border-l-4 border-l-amber-400" },
@@ -2429,6 +2487,7 @@ function PanelEnvioBloque({
   const soloLectura = modo === "ver" && !esSeguimiento;
   const [guardandoBloque, setGuardandoBloque] = useState(false);
   const [actualizandoErpBloque, setActualizandoErpBloque] = useState(false);
+  const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
 
   const primerSeg = modo !== "crear" ? (seguimientosGrupo || [])[0] || null : null;
 
@@ -2468,6 +2527,8 @@ function PanelEnvioBloque({
         precio_flete: seg?.precio_flete != null ? String(seg.precio_flete) : "",
         comodato: seg?.comodato || "",
         observaciones_externas: seg?.observaciones_externas || "",
+        cantidad: p.cantidad,
+        unidadMedida: p.unidadMedida,
       };
     })
   );
@@ -2589,7 +2650,7 @@ return (
           </button>
         </div>
 
-          <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4">
             <FormularioBloqueModal
               items={items}
               actualizarItem={actualizarItem}
@@ -2665,6 +2726,8 @@ return (
                 />
               )}
               cantidadImagenes={(codigo) => (imagenesPorProducto[codigo] || []).length}
+              urlOce={venta.documentoOce}
+              urlOcf={venta.documentoOcf}
             />
 
           {faltantes.length > 0 && modo !== "ver" && (
@@ -4265,21 +4328,14 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
 
               {abierto && (
                 opReal && !vinoDelFormulario ? (
-                  <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => setProductoAbierto(null)} />
-                    <div className="relative w-full max-w-[1500px] max-h-[92vh] overflow-y-auto bg-white rounded-2xl shadow-2xl">
-                      <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
-                        <div className="min-w-0">
-                          <p className="text-sm font-bold text-slate-800 truncate">{p.codigo}</p>
-                          <p className="text-[11px] text-slate-400 truncate">{p.descripcion}</p>
-                        </div>
-                        <button onClick={() => setProductoAbierto(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0">
-                          <X size={18} />
-                        </button>
-                      </div>
-                      <DetalleProductoErpReal op={opReal} producto={productoErpReal} />
-                    </div>
-                  </div>
+                  <ModalDetalleProductoErpReal
+                    p={p}
+                    opReal={opReal}
+                    productoErpReal={productoErpReal}
+                    urlOce={venta.documentoOce}
+                    urlOcf={venta.documentoOcf}
+                    onCerrar={() => setProductoAbierto(null)}
+                  />
                 ) : (
                   <FormularioProductoModal
                     codigo={codigo}
@@ -4302,6 +4358,8 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                     ordenCompraId={Number(venta.id)}
                     imagenes={imagenesPorProducto[codigo] || []}
                     onCambiarImagenes={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
+                    urlOce={venta.documentoOce}
+                    urlOcf={venta.documentoOcf}
                     estado={(seg.estado as "pendiente" | "preview" | "confirmado" | "subido") || "pendiente"}
                     rellenadoPor={seg.rellenado_por}
                     confirmadoPor={seg.confirmado_por}

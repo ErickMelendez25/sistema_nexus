@@ -821,12 +821,18 @@ function CatalogoSelect({
 // Confirmado por tu captura: 09 y 13 existen tal cual. Los otros 3
 // códigos (00/18/19) son el resto del catálogo oficial del MEF — si tu
 // ERP usa una lista distinta o recortada, ajusta este array.
+
+
 const FUENTES_FINANCIAMIENTO_OPCIONES = [
   { codigo: "00", nombre: "RECURSOS ORDINARIOS" },
+  { codigo: "04", nombre: "CONTRIBUCIONES A FONDOS" },
+  { codigo: "07", nombre: "FONDO DE COMPENSACIÓN MUNICIPAL" },
+  { codigo: "08", nombre: "IMPUESTOS MUNICIPALES" },
   { codigo: "09", nombre: "RECURSOS DIRECTAMENTE RECAUDADOS" },
   { codigo: "13", nombre: "DONACIONES Y TRANSFERENCIAS" },
-  { codigo: "18", nombre: "CANON Y SOBRECANON, REGALIAS, RENTA DE ADUANAS Y PARTICIPACIONES" },
-  { codigo: "19", nombre: "RECURSOS POR OPERACIONES OFICIALES DE CREDITO" },
+  { codigo: "15", nombre: "FONDO DE COMPENSACIÓN REGIONAL" },
+  { codigo: "18", nombre: "CANON Y SOBRECANON, REGALÍAS, RENTA DE ADUANAS Y PARTICIPACIONES" },
+  { codigo: "19", nombre: "RECURSOS POR OPERACIONES OFICIALES DE CRÉDITO" },
 ];
 
 
