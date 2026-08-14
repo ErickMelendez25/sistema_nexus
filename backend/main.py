@@ -118,7 +118,7 @@ CORS_ORIGINS = [
     "https://gruecolimp.com",
     "http://localhost:3002",
     "http://127.0.0.1:3002",
-    "http://192.168.1.178:3002",
+    "http://192.168.1.12:3002",
     "http://192.168.18.33:3002",
     "http://192.168.18.139:3002",
     "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
@@ -604,6 +604,8 @@ class OpProductoRellenarRequest(BaseModel):
     observaciones: Optional[str] = None
     observaciones_transporte: Optional[str] = None
     otras_observaciones: Optional[str] = None
+    margen: Optional[str] = None
+    margen_orden: Optional[str] = None
     tipo_envio: Optional[str] = None
     empresa_id: Optional[int] = None
     empresa_nombre: Optional[str] = None
@@ -619,7 +621,8 @@ class OpProductoBloqueItem(BaseModel):
     precio_flete: float | None = None
     comodato: str | None = None
     observaciones_externas: str | None = None
-
+    margen: str | None = None
+    margen_orden: str | None = None
 
 class DatosCompartidosRequest(BaseModel):
     proveedor_nombre: str | None = None
@@ -676,6 +679,8 @@ class ActualizarProductoRequest(BaseModel):
     observaciones: Optional[str] = None
     observaciones_transporte: Optional[str] = None
     otras_observaciones: Optional[str] = None
+    margen: Optional[str] = None
+    margen_orden: Optional[str] = None
     tipo_envio: Optional[str] = None
     empresa_id: Optional[int] = None
     empresa_nombre: Optional[str] = None
@@ -1124,6 +1129,15 @@ class OpOrdenProductosCrear(BaseModel):
     codigo_venta: Optional[str] = None
 
 
+class ProductoMontoReferencia(BaseModel):
+    codigo: str
+    monto_referencia: Optional[float] = None
+
+
+class MontosReferenciaRequest(BaseModel):
+    productos: list[ProductoMontoReferencia]
+
+
 @app.post("/erp/ordenes/{orden_compra_id}/productos-seguimiento/asegurar")
 def erp_orden_productos_asegurar(orden_compra_id: int, body: OpOrdenProductosCrear):
     """Crea (idempotente) las filas de seguimiento por producto para una
@@ -1138,6 +1152,37 @@ def erp_orden_productos_asegurar(orden_compra_id: int, body: OpOrdenProductosCre
         logger.warning(f"Error asegurando filas de productos para orden {orden_compra_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error preparando seguimiento: {e}")
     return op_seguimiento.obtener_seguimientos_de_orden(orden_compra_id)
+
+
+@app.post("/erp/ordenes/{orden_compra_id}/productos/montos-referencia")
+def erp_orden_montos_referencia(orden_compra_id: int, body: MontosReferenciaRequest):
+    """Guarda el 'Monto importe' de referencia POR PRODUCTO — lo usa    
+    CrearOrdenModal cuando la orden tiene varios productos, para que
+    cada uno calcule su propio margen en vez de compartir el montoVenta
+    de toda la orden. Nunca se manda al ERP."""
+    try:
+        op_seguimiento.guardar_montos_referencia(
+            orden_compra_id, [p.dict() for p in body.productos]
+        )
+    except Exception as e:
+        logger.warning(f"Error guardando montos de referencia de orden {orden_compra_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error guardando montos de referencia: {e}")
+    return {"ok": True}
+
+
+
+@app.get("/erp/ordenes/{orden_compra_id}/productos/montos-referencia")
+def erp_orden_montos_referencia_obtener(orden_compra_id: int):
+    """Contraparte de lectura del endpoint POST de arriba — el frontend
+    (obtenerMontosReferenciaProductos en erp-shared.ts) la usa para
+    rellenar 'Monto importe (ref. margen)' al reabrir una venta ya
+    guardada. Sin este GET, el campo siempre queda vacío."""
+    try:
+        productos = op_seguimiento.obtener_montos_referencia(orden_compra_id)
+    except Exception as e:
+        logger.warning(f"Error obteniendo montos de referencia de orden {orden_compra_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error obteniendo montos de referencia: {e}")
+    return {"productos": productos}
 
 
 @app.get("/erp/ordenes/{orden_compra_id}/productos-seguimiento")
@@ -1432,6 +1477,8 @@ class ActualizarYSubirErpRequest(BaseModel):
     observaciones: Optional[str] = None
     observaciones_transporte: Optional[str] = None
     otras_observaciones: Optional[str] = None
+    margen: Optional[str] = None
+    margen_orden: Optional[str] = None
     tipo_envio: Optional[str] = None
     empresa_id: Optional[int] = None
     empresa_nombre: Optional[str] = None

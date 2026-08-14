@@ -80,8 +80,9 @@ import {
   agrupacionPorId,
   listarAgrupaciones,
   subirDocumento,
+  guardarMontosReferenciaProductos,
+  obtenerMontosReferenciaProductos,
 } from "./erp-shared";
-
 import PanelConsultaMef from "./PanelConsultaMef";
 
 import { estiloEstado } from "./TabVentasErp";
@@ -119,6 +120,13 @@ interface CampoFaltante {
   label: string;
 }
 
+/** Producto del formulario + su "Monto importe" local — nunca se manda
+ * al ERP junto con el resto de productos; se guarda aparte vía
+ * guardarMontosReferenciaProductos(). Funciona igual que 'comodato'. */
+interface ProductoVentaForm extends ProductoVenta {
+  montoReferencia?: string;
+}
+
 interface FormState {
   // Empresa (nueva)
   empresa: EmpresaOption | null;
@@ -149,7 +157,8 @@ interface FormState {
   fuentesFinanciamiento: string;
   multipleFuentesFinanciamiento: boolean;
   // Productos
-  productos: ProductoVenta[];
+  // Productos
+  productos: ProductoVentaForm[];
   // Otros
   ventaPrivada: boolean;
   estadoProgreso: "creacion" | "en_proceso" | "completo";
@@ -180,7 +189,7 @@ const formularioVacio = (): FormState => ({
   numeroOcam: "",
   fuentesFinanciamiento: "00",
   multipleFuentesFinanciamiento: false,
-  productos: [{ codigo: "", descripcion: "", marca: "", cantidad: 1, isCompleted: false }],
+  productos: [{ codigo: "", descripcion: "", marca: "", cantidad: 1, isCompleted: false, montoReferencia: "" }],
   ventaPrivada: false,
   estadoProgreso: "creacion",
 });
@@ -291,12 +300,13 @@ function mapOcrAFormulario(datosOcr: Record<string, unknown>, base: FormState): 
   const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 
 const productosOcr = (otros.productos as Array<Record<string, unknown>> | undefined) || [];
-  const productosMapeados: ProductoVenta[] = productosOcr.map((p) => ({
+  const productosMapeados: ProductoVentaForm[] = productosOcr.map((p) => ({
     codigo: str(p.codigo),
     descripcion: str(p.descripcion),
     marca: str(p.marca),
     cantidad: Number(p.cantidad) || 1,
     isCompleted: false,
+    montoReferencia: "",
   }));
 
   const fechaMaxRaw = str(otros.fecha_max_entrega);
@@ -383,6 +393,7 @@ function mapVentaAFormulario(venta: Venta): FormState {
             marca: p.marca || "",
             cantidad: Number(p.cantidad) || 1,
             isCompleted: !!p.isCompleted,
+            montoReferencia: "",
           }))
         : base.productos,
     ventaPrivada: !!v.ventaPrivada,
@@ -1123,6 +1134,31 @@ const cargarGrupoDetalle = useCallback(async (ordenCompraId: number) => {
 
 
 
+// Trae los "Monto importe (ref. margen)" guardados aparte en MySQL
+// (nunca viajan en el payload al ERP, por eso hay que pedirlos por
+// separado con obtenerMontosReferenciaProductos) y los fusiona por
+// código dentro de form.productos. Sin esto, montoReferencia siempre
+// queda en "" al recargar una venta ya guardada.
+const cargarMontosReferencia = useCallback(async (ordenCompraId: number) => {
+    try {
+      const montos = await obtenerMontosReferenciaProductos(ordenCompraId);
+      if (!montos || montos.length === 0) return;
+      setForm((f) => ({
+        ...f,
+        productos: f.productos.map((p) => {
+          const match = montos.find((m) => m.codigo === p.codigo);
+          return match && match.monto_referencia != null
+            ? { ...p, montoReferencia: String(match.monto_referencia) }
+            : p;
+        }),
+      }));
+    } catch (e) {
+      console.warn(`No se pudieron cargar los montos de referencia de orden ${ordenCompraId}:`, e);
+    }
+  }, []);
+
+
+
   // Click en OTRA card de "Órdenes en esta agrupación" — trae esa venta
   // completa del ERP y la vuelca en el MISMO formulario, remontando los
   // inputs (mismo truco que iniciarOrdenEnBlanco), para saltar entre las
@@ -1149,6 +1185,7 @@ const cargarGrupoDetalle = useCallback(async (ordenCompraId: number) => {
       setDocActivo(v.documentoOce ? "oce" : "ocf");
 
       await cargarGrupoDetalle(venta.id);
+      await cargarMontosReferencia(venta.id);
     } catch (e) {
       setErrorGuardar(e instanceof Error ? e.message : "No se pudo cargar esa orden del grupo");
     } finally {
@@ -1555,7 +1592,7 @@ const confirmarActualizarOcf = async () => {
         montoVenta: Number(form.montoVenta),
         multipleFuentesFinanciamiento: form.multipleFuentesFinanciamiento,
         numeroOcam: form.numeroOcam || null,
-        productos: form.productos,
+        productos: form.productos.map(({ montoReferencia, ...p }) => p),
         siaf: form.siaf || null,
         ventaPrivada: form.ventaPrivada,
       };
@@ -1704,6 +1741,10 @@ useEffect(() => {
       // que el sidebar muestre las OCs del mismo grupo sin que el
       // usuario tenga que hacer nada.
       cargarGrupoDetalle(ventaExistente.id);
+      // Trae también los montos de referencia por producto guardados
+      // aparte — sin esto, "Monto importe (ref. margen)" siempre
+      // aparece vacío aunque ya se haya guardado antes.
+      cargarMontosReferencia(ventaExistente.id);
 
       // La venta YA tiene sus documentos subidos al ERP (documentoOce /
       // documentoOcf son URLs absolutas, no archivos locales que haya
@@ -1740,7 +1781,7 @@ useEffect(() => {
   }, []);
 
   // Producto: agregar / quitar / editar filas
-  const actualizarProducto = (idx: number, patch: Partial<ProductoVenta>) =>
+  const actualizarProducto = (idx: number, patch: Partial<ProductoVentaForm>) =>
     setForm((f) => ({
       ...f,
       productos: f.productos.map((p, i) => (i === idx ? { ...p, ...patch } : p)),
@@ -1749,7 +1790,7 @@ useEffect(() => {
   const agregarProducto = () =>
     setForm((f) => ({
       ...f,
-      productos: [...f.productos, { codigo: "", descripcion: "", marca: "", cantidad: 1, isCompleted: false }],
+      productos: [...f.productos, { codigo: "", descripcion: "", marca: "", cantidad: 1, isCompleted: false, montoReferencia: "" }],
     }));
 
   const quitarProducto = (idx: number) =>
@@ -1822,7 +1863,7 @@ const guardar = async () => {
         montoVenta: Number(form.montoVenta),
         multipleFuentesFinanciamiento: form.multipleFuentesFinanciamiento,
         numeroOcam: form.numeroOcam || null,
-        productos: form.productos,
+        productos: form.productos.map(({ montoReferencia, ...p }) => p),
         siaf: form.siaf || null,
         ventaPrivada: form.ventaPrivada,
       };
@@ -1833,6 +1874,26 @@ const guardar = async () => {
 
       setVentaGuardada(venta);
       onGuardado?.(venta);
+
+      // Si la orden tiene VARIOS productos, cada uno pudo recibir su
+      // propio "Monto importe" (referencia para calcular su margen
+      // individual) — se guarda aparte, nunca va dentro del payload
+      // que se manda al ERP.
+      if (form.productos.length > 1) {
+        try {
+          await guardarMontosReferenciaProductos(
+            venta.id,
+            form.productos
+              .filter((p) => p.codigo.trim())
+              .map((p) => ({
+                codigo: p.codigo.trim(),
+                monto_referencia: p.montoReferencia ? Number(p.montoReferencia) : null,
+              }))
+          );
+        } catch (e) {
+          console.warn("No se pudieron guardar los montos de referencia por producto:", e);
+        }
+      }
 
       // Solo se agrupa automáticamente la PRIMERA vez que se crea la
       // venta (no en cada edición posterior) — si ya estaba en un
@@ -2638,7 +2699,14 @@ return (
                 )}
                 <div className="space-y-3">
                 {form.productos.map((p, idx) => (
-                    <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1fr_2fr_1fr_0.7fr_auto] gap-3 items-end">
+                    <div
+                      key={idx}
+                      className={`grid grid-cols-1 gap-3 items-end ${
+                        form.productos.length > 1
+                          ? "sm:grid-cols-[1fr_2fr_1fr_0.7fr_0.9fr_auto]"
+                          : "sm:grid-cols-[1fr_2fr_1fr_0.7fr_auto]"
+                      }`}
+                    >
                     <div
                         ref={(el) => { refsCampos.current[`campo-producto-${idx}-codigo`] = el; }}
                         className={`rounded-lg ${campoResaltado === `campo-producto-${idx}-codigo` ? "hb-campo-resaltado" : ""}`}
@@ -2680,6 +2748,20 @@ return (
                           />
                         </Field>
                       </div>
+                      {form.productos.length > 1 && (
+                        <div>
+                          <Field label="Monto importe (ref. margen)">
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={p.montoReferencia || ""}
+                              onChange={(e) => actualizarProducto(idx, { montoReferencia: e.target.value })}
+                              placeholder="0.00"
+                              className={inputCls}
+                            />
+                          </Field>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => quitarProducto(idx)}

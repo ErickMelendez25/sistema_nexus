@@ -31,6 +31,19 @@ import uuid
 logger = logging.getLogger("helbot.op_seguimiento")
 
 
+def _limpiar_decimal(valor):
+    """Convierte '' o None a None (NULL en MySQL) para columnas DECIMAL.
+    El frontend a veces manda margen/margen_orden como string vacío
+    ('') cuando no aplica (ej. margen_orden en un envío individual, no
+    en bloque) — MySQL no puede castear '' a DECIMAL y lanza
+    'Incorrect decimal value' (error 1366)."""
+    if valor is None:
+        return None
+    if isinstance(valor, str) and valor.strip() == "":
+        return None
+    return valor
+
+
 # Campos "clave" para saber si un producto quedó completo. No bloqueamos
 # el envío si faltan (ventas puede mandar parcial), solo lo mostramos
 # como advertencia en cards/notificaciones. 'comodato' y 'observaciones'
@@ -43,6 +56,23 @@ CAMPOS_CLAVE_SEGUIMIENTO = [
     ("precio_flete", "Precio flete"),
 ]
 
+
+
+def calcular_margen(precio_total: float | None, precio_flete: float | None, monto_referencia: float | None) -> float | None:
+    """
+    margen % = ((monto_referencia - (precio_total + precio_flete)) / monto_referencia) * 100
+    precio_total ya viene como precio_unitario * cantidad (calculado en el frontend).
+    monto_referencia = montoVenta de la orden (producto único) o importe OCR
+    del producto / montoVenta de la orden (varios productos), según el caso.
+    """
+    if not monto_referencia:
+        return None
+    try:
+        costo = float(precio_total or 0) + float(precio_flete or 0)
+        return round(((float(monto_referencia) - costo) / float(monto_referencia)) * 100, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    
 
 def calcular_campos_faltantes(fila: dict | None) -> list[str]:
     if not fila:
@@ -59,6 +89,23 @@ def calcular_campos_faltantes(fila: dict | None) -> list[str]:
     return faltantes
 
 
+def calcular_margen(precio_total: float | None, precio_flete: float | None, monto_referencia: float | None) -> float | None:
+    """
+    margen % = ((monto_referencia - (precio_total + precio_flete)) / monto_referencia) * 100
+
+    - precio_total: YA es precio_unitario * cantidad (se calcula en el frontend antes de llamar aquí).
+    - monto_referencia: montoVenta de la orden (caso 1 producto por orden) o el
+      importe OCR del producto / montoVenta de la orden (caso varios productos).
+    Nunca se manda al ERP — solo vive en MySQL, igual que 'comodato'.
+    """
+    if not monto_referencia:
+        return None
+    try:
+        costo = float(precio_total or 0) + float(precio_flete or 0)
+        return round(((float(monto_referencia) - costo) / float(monto_referencia)) * 100, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
 
 ERP_ORDENES_PROVEEDOR = f"{ERP_API_BASE}/ordenes-proveedores"
 
@@ -71,6 +118,17 @@ def listar_ops_de_orden(orden_compra_id: int) -> list[dict]:
     if not erp_session.autenticado:
         raise RuntimeError("Sesión ERP no activa")
     r = erp_session.session.get(f"{ERP_ORDENES_PROVEEDOR}/{orden_compra_id}/op", timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
+
+def erp_detalle_op(op_id: int) -> dict:
+    """GET /ordenes-proveedores/op/{op_id} del ERP real — detalle completo
+    de UNA OP (incluye transportesAsignados y pagos)."""
+    if not erp_session.autenticado:
+        raise RuntimeError("Sesión ERP no activa")
+    r = erp_session.session.get(f"{ERP_ORDENES_PROVEEDOR}/op/{op_id}", timeout=20)
     r.raise_for_status()
     return r.json()
 
@@ -317,6 +375,59 @@ def asegurar_filas_productos_preview(
         conn.close()
 
 
+def guardar_montos_referencia(orden_compra_id: int, montos: list[dict]):
+    """Guarda el 'Monto importe' de referencia POR PRODUCTO — lo llena
+    Ventas en CrearOrdenModal cuando la orden tiene VARIOS productos
+    (cada uno con su propio monto de referencia para calcular su margen
+    individual, en vez de usar el montoVenta de TODA la orden). Nunca se
+    manda al ERP — vive solo en MySQL, igual que 'comodato'. `montos` es
+    una lista de dicts: {"codigo": str, "monto_referencia": float|None}."""
+    if not montos:
+        return
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            for m in montos:
+                codigo = m.get("codigo")
+                if not codigo:
+                    continue
+                valor = _limpiar_decimal(m.get("monto_referencia"))
+                cur.execute(
+                    """
+                    INSERT INTO op_producto_seguimiento
+                        (op_id, orden_compra_id, producto_codigo, estado, monto_referencia)
+                    VALUES (NULL, %s, %s, 'pendiente', %s)
+                    ON DUPLICATE KEY UPDATE monto_referencia = VALUES(monto_referencia)
+                    """,
+                    (orden_compra_id, str(codigo), valor),
+                )
+    finally:
+        conn.close()
+
+
+def obtener_montos_referencia(orden_compra_id: int) -> list[dict]:
+    """Lee los 'monto_referencia' guardados por producto para esta
+    orden — contraparte de guardar_montos_referencia()."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT producto_codigo AS codigo, monto_referencia
+                FROM op_producto_seguimiento
+                WHERE orden_compra_id = %s AND monto_referencia IS NOT NULL
+                """,
+                (orden_compra_id,),
+            )
+            filas = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {"codigo": f["codigo"], "monto_referencia": float(f["monto_referencia"]) if f["monto_referencia"] is not None else None}
+        for f in filas
+    ]
+
+
 def obtener_seguimientos_de_orden(orden_compra_id: int) -> dict[str, dict]:
     """{producto_codigo: fila} de seguimiento para una orden de compra,
     sin importar si ya tiene op_id asignado o no (op_id puede ser NULL
@@ -430,6 +541,8 @@ def rellenar_producto_de_orden(
                     proveedor_telefono = %s,
                     precio_producto = %s,
                     comodato = %s,
+                    margen = %s,
+                    margen_orden = %s,
                     agencia_transporte = %s,
                     transporte_id = %s,
                     precio_flete = %s,
@@ -453,6 +566,8 @@ def rellenar_producto_de_orden(
                     datos.get("proveedor_telefono"),
                     datos.get("precio_producto"),
                     datos.get("comodato"),
+                    _limpiar_decimal(datos.get("margen")),
+                    _limpiar_decimal(datos.get("margen_orden")),
                     datos.get("agencia_transporte"),
                     datos.get("transporte_id"),
                     datos.get("precio_flete"),
@@ -487,6 +602,8 @@ def rellenar_producto_de_orden(
                         proveedor_telefono,
                         precio_producto,
                         comodato,
+                        margen,
+                        margen_orden,
                         agencia_transporte,
                         transporte_id,
                         precio_flete,
@@ -499,7 +616,7 @@ def rellenar_producto_de_orden(
                         empresa_nombre,
                         rellenado_por,
                         rellenado_en
-                    ) VALUES (%s,%s,%s,%s,%s,%s,'preview',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,'preview',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
                         None,
@@ -513,6 +630,8 @@ def rellenar_producto_de_orden(
                         datos.get("proveedor_telefono"),
                         datos.get("precio_producto"),
                         datos.get("comodato"),
+                        _limpiar_decimal(datos.get("margen")),
+                        _limpiar_decimal(datos.get("margen_orden")),
                         datos.get("agencia_transporte"),
                         datos.get("transporte_id"),
                         datos.get("precio_flete"),
@@ -561,6 +680,24 @@ def rellenar_producto_de_orden(
     finally:
         conn.close()
 
+    try:
+        generar_pdf_consolidado(orden_compra_id, producto_codigo)
+    except Exception as e:
+        logger.warning(f"rellenar_producto_de_orden: no se pudo generar el PDF consolidado: {e}")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM op_producto_seguimiento WHERE orden_compra_id = %s AND producto_codigo = %s",
+                (orden_compra_id, producto_codigo),
+            )
+            fila = cur.fetchone()
+            fila["campos_faltantes"] = calcular_campos_faltantes(fila)
+            return _con_pdf_url(fila)
+    finally:
+        conn.close()
+
 
 def _asignar_grupo_envio(orden_compra_id: int, producto_codigo: str, grupo_envio_id: str):
     """Marca un producto como parte de un envío en bloque."""
@@ -586,10 +723,11 @@ def rellenar_productos_en_bloque(
     """
     Llena varios productos de una vez con datos COMPARTIDOS (proveedor,
     teléfono, tipo de envío, agencia de transporte, observaciones) pero
-    precio_producto y precio_flete INDEPENDIENTES por producto.
+    precio_producto, precio_flete Y margen INDEPENDIENTES por producto.
 
     `productos` es una lista de dicts:
-        {"codigo": str, "precio_producto": float, "precio_flete": float, "descripcion": str}
+        {"codigo": str, "precio_producto": float, "precio_flete": float,
+         "descripcion": str, "margen": float | None}
 
     Genera 'observaciones_transporte' con el desglose de flete por
     producto (igual para todos los del grupo) y etiqueta a todos con el
@@ -620,6 +758,8 @@ def rellenar_productos_en_bloque(
             "comodato": p.get("comodato"),
             "observaciones_externas": p.get("observaciones_externas"),
             "observaciones_transporte": observaciones_transporte_generadas,
+            "margen": p.get("margen"),
+            "margen_orden": p.get("margen_orden") or datos_compartidos.get("margen_orden"),
         }
         fila = rellenar_producto_de_orden(
             orden_compra_id=orden_compra_id,
@@ -645,7 +785,6 @@ def rellenar_productos_en_bloque(
         logger.warning(f"rellenar_productos_en_bloque: no se pudo generar el PDF consolidado del grupo: {e}")
 
     return resultados
-
 
 def confirmar_producto_de_orden(orden_compra_id: int, producto_codigo: str, confirmado_por: str) -> dict:
     """Seguimiento revisa el 'preview' y lo aprueba -> pasa a 'confirmado'.
@@ -704,6 +843,8 @@ def actualizar_producto_seguimiento(orden_compra_id: int, producto_codigo: str, 
                     proveedor_telefono = %s,
                     precio_producto = %s,
                     comodato = %s,
+                    margen = %s,
+                    margen_orden = %s,
                     agencia_transporte = %s,
                     transporte_id = %s,
                     precio_flete = %s,
@@ -723,6 +864,8 @@ def actualizar_producto_seguimiento(orden_compra_id: int, producto_codigo: str, 
                     datos.get("proveedor_telefono"),
                     datos.get("precio_producto"),
                     datos.get("comodato"),
+                    _limpiar_decimal(datos.get("margen")),
+                    _limpiar_decimal(datos.get("margen_orden")),
                     datos.get("agencia_transporte"),
                     datos.get("transporte_id"),
                     datos.get("precio_flete"),

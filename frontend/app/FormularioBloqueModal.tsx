@@ -4,7 +4,7 @@ import {
   X, Package, Building2, Users, MessageSquareText, FileText,
 } from "lucide-react";
 import { useState } from "react";
-import { EmpresaOption } from "./erp-shared";
+import { EmpresaOption, calcularMargen } from "./erp-shared";
 import { VisorDocumentos, nombreDesdeUrl } from "./FormularioProductoModal";
 
 interface ProductoBloqueForm {
@@ -14,6 +14,8 @@ interface ProductoBloqueForm {
   precio_flete: string;
   comodato: string;
   observaciones_externas: string;
+  montoReferencia?: string;
+  margen?: string;
   cantidad?: number | string;
   unidadMedida?: string;
 }
@@ -29,13 +31,18 @@ interface CompartidoBloque {
 }
 
 interface Props {
-  items: ProductoBloqueForm[];
-  actualizarItem: (
+    items: ProductoBloqueForm[];
+    productoInicial?: string | null;
+    montoVenta?: number | null;
+    /** true mientras se envía/confirma/guarda/actualiza — atenúa el
+     * formulario mientras el overlay de carga (definido en OpsDrawer.tsx)
+     * cubre todo el modal. */
+    procesando?: boolean;
+    actualizarItem: (
     codigo: string,
-    campo: "precio_producto" | "precio_flete" | "comodato" | "observaciones_externas",
+    campo: "precio_producto" | "precio_flete" | "comodato" | "observaciones_externas" | "montoReferencia",
     valor: string
   ) => void;
-
   compartido: CompartidoBloque;
   actualizarCompartido: (campo: keyof CompartidoBloque, valor: string) => void;
   soloLectura: boolean;
@@ -60,7 +67,6 @@ interface Props {
   renderSelectorImagenes: (codigo: string) => React.ReactNode;
   cantidadImagenes: (codigo: string) => number;
 }
-
 const TEXTO_OBS_AGENCIA =
   "LLAMAR 1 HORA ANTES A JOHANA CEL: 941 567 335 (LUNES A VIERNES: DE 8:30 AM A 6:00 PM, SÁBADOS: 9:00 AM - 12:00 PM) EMITIR LA GUÍA CON LA DIRECCIÓN DE ENTREGA";
 const TEXTO_OBS_ENTIDAD =
@@ -68,6 +74,8 @@ const TEXTO_OBS_ENTIDAD =
 
 export default function FormularioBloqueModal({
   items,
+  productoInicial,
+  procesando,
   actualizarItem,
   compartido,
   actualizarCompartido,
@@ -88,7 +96,7 @@ export default function FormularioBloqueModal({
   cantidadImagenes,
 }: Props) {
   const [tabActivo, setTabActivo] = useState<string | null>(
-    items[0]?.codigo ?? null
+    productoInicial ?? (items[0]?.codigo ?? null)
   );
   const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
 
@@ -101,7 +109,11 @@ export default function FormularioBloqueModal({
   const hayVisor = !!(urlOce || urlOcf);
 
   return (
-    <div className={`flex flex-col ${hayVisor ? "xl:flex-row" : ""} gap-3 items-start`}>
+      <div
+        className={`flex flex-col ${hayVisor ? "xl:flex-row" : ""} gap-3 items-start transition-opacity duration-200 ${
+          procesando ? "opacity-50 pointer-events-none select-none" : "opacity-100"
+        }`}
+      >
       {/* ===== Columna izquierda: todo el formulario del bloque ===== */}
       <div className="flex-1 min-w-0 w-full space-y-2.5">
         {/* Grid 2x2 — datos comunes a TODO el bloque */}
@@ -259,12 +271,12 @@ export default function FormularioBloqueModal({
               </div>
               <div className="rounded-lg bg-white border border-slate-200 px-3 py-2">
                 <p className="text-[10px] text-slate-400 uppercase font-semibold">Total productos</p>
-                <p className="text-sm font-bold text-emerald-700">S/ {totalProductos.toFixed(5)}</p>
+                <p className="text-sm font-bold text-emerald-700">S/ {totalProductos.toFixed(3)}</p>
               </div>
               {compartido.tipo_envio === "AGENCIA" && (
                 <div className="rounded-lg bg-white border border-slate-200 px-3 py-2 col-span-2">
                   <p className="text-[10px] text-slate-400 uppercase font-semibold">Total flete</p>
-                  <p className="text-sm font-bold text-slate-800">S/ {totalFlete.toFixed(5)}</p>
+                  <p className="text-sm font-bold text-slate-800">S/ {totalFlete.toFixed(3)}</p>
                 </div>
               )}
             </div>
@@ -344,6 +356,21 @@ export default function FormularioBloqueModal({
                     </span>
                   )}
                 </div>
+
+                {/* Monto referencia + margen — el margen de ESTE producto
+                    se calcula SOLO con su propio monto de referencia, no
+                    con montoVenta de toda la orden. */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  <CampoSimple
+                    label="Monto referencia (para margen)"
+                    value={it.montoReferencia || ""}
+                    onChange={(v) => actualizarItem(it.codigo, "montoReferencia", v)}
+                    disabled={soloLectura}
+                    placeholder="0.00"
+                  />
+                  <CajaMargenMini margen={it.margen || ""} />
+                </div>
+
                 <div className={`grid gap-2.5 ${compartido.tipo_envio === "AGENCIA" ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3"}`}>
                   <CampoSimple label="Precio producto" value={it.precio_producto} onChange={(v) => actualizarItem(it.codigo, "precio_producto", v)} disabled={soloLectura} placeholder="0.00" />
                   <CampoSimple label="Comodato" value={it.comodato} onChange={(v) => actualizarItem(it.codigo, "comodato", v)} disabled={soloLectura} placeholder="-" />
@@ -395,6 +422,33 @@ function CampoSimple({
         onChange={(e) => onChange(e.target.value)}
         className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 disabled:bg-slate-50 disabled:text-slate-500"
       />
+    </div>
+  );
+}
+
+// Cajita de margen por producto, dentro de cada tab del bloque — mismo
+// esquema de colores que CajaMargen del formulario individual: <8% rojo,
+// 8-10% amarillo, >=10% verde. Nunca se manda al ERP.
+function CajaMargenMini({ margen }: { margen: string }) {
+  const valor = margen.trim() === "" ? null : parseFloat(margen);
+  if (valor == null || Number.isNaN(valor)) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 flex flex-col justify-center">
+        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Margen</p>
+        <p className="text-[11px] text-slate-400">Ingresa precio, flete y monto ref.</p>
+      </div>
+    );
+  }
+  const color =
+    valor < 8
+      ? "bg-red-50 border-red-300 text-red-700"
+      : valor < 10
+      ? "bg-amber-50 border-amber-300 text-amber-700"
+      : "bg-emerald-50 border-emerald-300 text-emerald-700";
+  return (
+    <div className={`rounded-lg border px-3 py-2 flex flex-col justify-center ${color}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wide opacity-80">Margen</p>
+      <p className="text-sm font-bold">{valor.toFixed(2)}%</p>
     </div>
   );
 }

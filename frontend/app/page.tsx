@@ -1592,7 +1592,7 @@ const tabs = esAdmin
     : esGerencia
     ? todosLosTabs.filter((t) => t.id === "auditoria" || t.id === "chat")
     : esSeguimiento
-    ? todosLosTabs.filter((t) => t.id !== "auditoria")
+    ? todosLosTabs
     : esPracticante
     ? todosLosTabs.filter((t) => t.id === "chat")
     : esVentas

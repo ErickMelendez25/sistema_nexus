@@ -5,8 +5,8 @@ import {
   X, Loader2, ChevronRight, ChevronUp, ChevronDown, Truck, Package, CheckCircle2, Clock,
   AlertTriangle, Send, ArrowLeft, ImagePlus, MessageSquareText, ShieldCheck, FileText, RefreshCw, Plus,
 } from "lucide-react";
-import { VentaErp, OpResumen, ocamDe, codigoVentaDe } from "./TabVentasErp";
-import { EmpresaOption, listarEmpresas, contactosDeProveedor, crearContactoProveedor, ContactoProveedor } from "./erp-shared";
+import { VentaErp, OpResumen, ocamDe, codigoVentaDe, montoDe } from "./TabVentasErp";
+import { EmpresaOption, listarEmpresas, contactosDeProveedor, crearContactoProveedor, ContactoProveedor, calcularMargen } from "./erp-shared";
 
 import FormularioProductoModal, { VisorDocumentos, nombreDesdeUrl } from "./FormularioProductoModal";
 
@@ -715,13 +715,23 @@ interface ToastItem {
 
 function useToasts() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const ultimoRef = useRef<{ mensaje: string; ts: number } | null>(null);
 
   const mostrarToast = useCallback((tipo: "success" | "error", mensaje: string) => {
-    const id = Date.now() + Math.random();
+    const ahora = Date.now();
+    // Red de seguridad: si algún flujo en bloque llegara a disparar el
+    // mismo mensaje dos veces casi al mismo tiempo, se ignora el
+    // duplicado — el usuario debe ver UNA sola notificación por acción,
+    // sin importar cuántos productos tenga el bloque.
+    if (ultimoRef.current && ultimoRef.current.mensaje === mensaje && ahora - ultimoRef.current.ts < 500) {
+      return;
+    }
+    ultimoRef.current = { mensaje, ts: ahora };
+    const id = ahora + Math.random();
     setToasts((prev) => [...prev, { id, tipo, mensaje }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3500);
+    }, 4000);
   }, []);
 
   const cerrarToast = useCallback((id: number) => {
@@ -734,27 +744,73 @@ function useToasts() {
 function ToastContainer({ toasts, onCerrar }: { toasts: ToastItem[]; onCerrar: (id: number) => void }) {
   if (toasts.length === 0) return null;
   return (
-    <div className="fixed bottom-5 right-5 z-[10000] flex flex-col gap-2 items-end pointer-events-none">
+    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[10000] flex flex-col gap-2.5 items-center pointer-events-none w-full px-4">
       {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`pointer-events-auto flex items-center gap-2.5 pl-3.5 pr-3 py-3 rounded-xl shadow-xl border text-sm font-medium min-w-[260px] max-w-[380px] transition-all ${
-            t.tipo === "success"
-              ? "bg-emerald-600 border-emerald-700 text-white"
-              : "bg-red-600 border-red-700 text-white"
-          }`}
-        >
-          {t.tipo === "success" ? (
-            <CheckCircle2 size={16} className="shrink-0" />
-          ) : (
-            <AlertTriangle size={16} className="shrink-0" />
-          )}
-          <span className="flex-1 leading-snug">{t.mensaje}</span>
-          <button onClick={() => onCerrar(t.id)} className="opacity-70 hover:opacity-100 shrink-0">
-            <X size={13} />
-          </button>
-        </div>
+        <ToastCard key={t.id} toast={t} onCerrar={onCerrar} />
       ))}
+    </div>
+  );
+}
+
+// Toast individual: entra con slide + fade suave, y una barra inferior
+// que se va vaciando — el usuario ve cuánto le queda antes de que se
+// cierre solo. Solo íconos, sin emojis.
+function ToastCard({ toast, onCerrar }: { toast: ToastItem; onCerrar: (id: number) => void }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  const esExito = toast.tipo === "success";
+
+  return (
+    <div
+      className={`pointer-events-auto relative flex items-center gap-3 pl-4 pr-3 py-3.5 rounded-2xl shadow-2xl border bg-white/95 backdrop-blur-xl min-w-[300px] max-w-[420px] overflow-hidden transition-all duration-300 ease-out ${
+        visible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 -translate-y-3 scale-95"
+      } ${esExito ? "border-emerald-200" : "border-red-200"}`}
+    >
+      <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${esExito ? "bg-emerald-100" : "bg-red-100"}`}>
+        {esExito ? (
+          <CheckCircle2 size={18} className="text-emerald-600" />
+        ) : (
+          <AlertTriangle size={18} className="text-red-600" />
+        )}
+      </div>
+      <p className="flex-1 text-[13px] font-semibold leading-snug text-slate-800">{toast.mensaje}</p>
+      <button
+        onClick={() => onCerrar(toast.id)}
+        className="shrink-0 p-1 rounded-lg text-slate-300 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+      >
+        <X size={14} />
+      </button>
+      <div
+        className={`absolute bottom-0 left-0 h-[3px] ${esExito ? "bg-emerald-400" : "bg-red-400"} transition-all ease-linear`}
+        style={{ width: visible ? "0%" : "100%", transitionDuration: visible ? "4000ms" : "0ms" }}
+      />
+    </div>
+  );
+}
+
+// Overlay "en progreso" — cubre toda la pantalla mientras se procesa
+// una acción (individual o en bloque). Así el usuario nunca ve varios
+// toasts sueltos ni puede cerrar el modal a medio guardar.
+function OverlayProcesando({ mensaje }: { mensaje: string }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-white/70 backdrop-blur-md">
+      <div className="flex flex-col items-center gap-4 px-8 py-7 rounded-2xl">
+        <div className="relative w-14 h-14">
+          <div className="absolute inset-0 rounded-full border-[3px] border-indigo-100" />
+          <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-[#4F46E5] border-r-[#4F46E5] animate-spin" />
+          <div className="absolute inset-[10px] rounded-full bg-indigo-50 flex items-center justify-center">
+            <ShieldCheck size={16} className="text-[#4F46E5]" />
+          </div>
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-bold text-slate-800">{mensaje}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Esto tomará solo un momento…</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1330,70 +1386,9 @@ function CampoFicha({
     </div>
   );
 }
-function ListaOps({
-  ops,
-  cargando,
-  error,
-  onSeleccionar,
-}: {
-  ops: OpResumen[];
-  cargando: boolean;
-  error: string;
-  onSeleccionar: (id: number) => void;
-}) {
-  if (cargando) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-slate-500 p-5">
-        <Loader2 size={15} className="animate-spin" /> Cargando órdenes de proveedor…
-      </div>
-    );
-  }
-  if (error) {
-    return (
-      <div className="m-5 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
-        <AlertTriangle size={15} /> {error}
-      </div>
-    );
-  }
-  if (ops.length === 0) {
-    return <p className="text-sm text-slate-400 p-5 text-center">Esta venta no tiene órdenes de proveedor.</p>;
-  }
-  return (
-    <div className="p-3 space-y-2">
-      {ops.map((op) => {
-        const badge = badgeSeguimiento(op._seguimiento?.estado);
-        const Icon = badge.icon;
-        return (
-          <button
-            key={op.id}
-            onClick={() => onSeleccionar(op.id)}
-            className="w-full text-left bg-white border border-slate-200 hover:border-indigo-300 hover:shadow-sm rounded-xl p-3.5 transition-all"
-          >
-            <div className="flex items-center justify-between mb-1.5">
-              <span style={{ fontFamily: "var(--font-mono)" }} className="text-xs font-semibold text-slate-800">
-                {op.codigoOp}
-              </span>
-              <ChevronRight size={14} className="text-slate-300" />
-            </div>
-            <p className="text-xs text-slate-500 mb-2 truncate">{op.proveedor?.razonSocial || "Sin proveedor"}</p>
-            <div className="flex items-center justify-between">
-              <span
-                style={{ fontFamily: "var(--font-mono)" }}
-                className="text-sm font-semibold text-slate-800"
-              >
-                S/ {Number(op.totalProveedor || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 })}
-              </span>
-              <span className={`flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border ${badge.clase}`}>
-                <Icon size={10} />
-                {badge.texto}
-              </span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+
+
+
 
 interface FormularioProducto {
   proveedor_nombre: string;
@@ -1408,6 +1403,8 @@ interface FormularioProducto {
   observaciones: string;
   observaciones_transporte: string;
   otras_observaciones: string;   // NUEVO — va al campo "observaciones" de la OP
+  margen: string;                // NUEVO — calculado, nunca lo edita el usuario a mano
+  margen_orden: string;          // NUEVO — margen promedio de la orden (envíos en bloque)
   tipo_envio: string;
   empresa_id: string;
   empresa_nombre: string;
@@ -1426,10 +1423,13 @@ const formularioVacio: FormularioProducto = {
   observaciones: "",
   observaciones_transporte: "",
   otras_observaciones: "",
+  margen: "",
+  margen_orden: "",
   tipo_envio: "",
   empresa_id: "",
   empresa_nombre: "",
 };
+
 
 const TEXTO_OBS_AGENCIA =
   "LLAMAR 1 HORA ANTES A JOHANA CEL: 941 567 335 (LUNES A VIERNES: DE 8:30 AM A 6:00 PM, SÁBADOS: 9:00 AM - 12:00 PM) EMITIR LA GUÍA CON LA DIRECCIÓN DE ENTREGA";
@@ -1852,6 +1852,7 @@ function DetalleOp({
   const [subiendoCodigo, setSubiendoCodigo] = useState<string | null>(null);
   const [confirmandoCodigo, setConfirmandoCodigo] = useState<string | null>(null);
   const [imagenesPorProducto, setImagenesPorProducto] = useState<Record<string, ImagenProducto[]>>({});
+  
 
   const [modoSeleccion, setModoSeleccion] = useState(false);
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set());
@@ -1909,6 +1910,8 @@ function DetalleOp({
           observaciones: seg?.observaciones || "",
           observaciones_transporte: seg?.observaciones_transporte || "",
           otras_observaciones: seg?.otras_observaciones || "",
+          margen: seg?.margen != null ? String(seg.margen) : "",
+          margen_orden: seg?.margen_orden != null ? String(seg.margen_orden) : "",
           tipo_envio: seg?.tipo_envio || "",
           empresa_id: seg?.empresa_id != null ? String(seg.empresa_id) : "",
           empresa_nombre: seg?.empresa_nombre || "",
@@ -2424,6 +2427,10 @@ interface ProductoBloqueForm {
   precio_flete: string;
   comodato: string;
   observaciones_externas: string;
+  montoReferencia?: string;   // NUEVO — "Monto importe" de ESE producto, para calcular SU margen individual
+  margen?: string;            // NUEVO — calculado, nunca lo edita el usuario a mano
+  cantidad?: number | string;
+  unidadMedida?: string;
 }
 
 function PanelEnvioBloque({
@@ -2439,11 +2446,14 @@ function PanelEnvioBloque({
   mostrarToast,
   modo = "crear",
   seguimientosGrupo,
+  todosSeguimientos,
   empresas,
   esSeguimiento,
   empresaSeleccionadaInicial,
   opProveedorId,
   opEmpresaId,
+  productoInicial,
+  montoVenta,
   onConfirmarBloque,
   onGuardarCambiosBloque,
   onActualizarErpBloque,
@@ -2466,6 +2476,11 @@ function PanelEnvioBloque({
   modo?: "crear" | "confirmar" | "ver";
   /** Filas de op_producto_seguimiento del bloque — solo en modo "confirmar", para precargar todo. */
   seguimientosGrupo?: any[];
+  /** TODOS los seguimientos de la venta (no solo los del grupo) — se usa
+   * en modo "crear" para encontrar el monto_referencia que Ventas ya
+   * había cargado por producto en CrearOrdenModal, antes de que exista
+   * cualquier fila de grupo_envio_id. */
+  todosSeguimientos?: any[];
   empresas?: EmpresaOption[];
   esSeguimiento?: boolean;
   empresaSeleccionadaInicial?: string;
@@ -2475,6 +2490,14 @@ function PanelEnvioBloque({
    * duplicada por creer que cambió el proveedor. */
   opProveedorId?: number | null;
   opEmpresaId?: number | null;
+  /** Código del producto en el que se hizo clic para abrir este
+   * bloque — el modal (FormularioBloqueModal) debe nacer con ESE tab
+   * activo, no siempre en el primer producto de la lista. */
+  productoInicial?: string | null;
+  /** montoVenta de la orden completa — YA NO se usa para calcular
+   * margen en bloque (cada producto usa su propio monto_referencia).
+   * Se deja el prop por compatibilidad, sin efecto en el margen. */
+  montoVenta?: number | null;
   onConfirmarBloque?: (datos: { items: ProductoBloqueForm[]; compartido: any; empresaId: string }) => Promise<void>;
   /** Bloque ya confirmado: guarda cambios en Helbot (MySQL) sin tocar el ERP real. */
   onGuardarCambiosBloque?: (datos: { items: ProductoBloqueForm[]; compartido: any; empresaId: string }, opProveedorId?: number | null, opEmpresaId?: number | null) => Promise<void>;
@@ -2520,6 +2543,12 @@ function PanelEnvioBloque({
     productosVenta.map((p: any) => {
       const codigo = String(p.codigo ?? p.id ?? "").trim();
       const seg = (seguimientosGrupo || []).find((s: any) => String(s.producto_codigo).trim() === codigo);
+      // En modo "crear" seguimientosGrupo todavía no existe (el bloque
+      // recién se está armando) — el monto_referencia por producto ya
+      // fue cargado por Ventas en CrearOrdenModal y vive en el
+      // seguimiento GLOBAL de la venta, no en el del grupo.
+      const segGlobal = (todosSeguimientos || []).find((s: any) => String(s.producto_codigo).trim() === codigo);
+      const montoRef = seg?.monto_referencia ?? segGlobal?.monto_referencia;
       return {
         codigo,
         descripcion: p.descripcion || "",
@@ -2527,6 +2556,8 @@ function PanelEnvioBloque({
         precio_flete: seg?.precio_flete != null ? String(seg.precio_flete) : "",
         comodato: seg?.comodato || "",
         observaciones_externas: seg?.observaciones_externas || "",
+        montoReferencia: montoRef != null ? String(montoRef) : "",
+        margen: seg?.margen != null ? String(seg.margen) : "",
         cantidad: p.cantidad,
         unidadMedida: p.unidadMedida,
       };
@@ -2563,8 +2594,31 @@ const [enviando, setEnviando] = useState(false);
   const actualizarCompartido = (campo: keyof typeof compartido, valor: string) =>
     setCompartido((c) => ({ ...c, [campo]: valor }));
 
-    const actualizarItem = (codigo: string, campo: "precio_producto" | "precio_flete" | "comodato" | "observaciones_externas", valor: string) =>
-    setItems((prev) => prev.map((it) => (it.codigo === codigo ? { ...it, [campo]: valor } : it)));
+  const actualizarItem = (
+    codigo: string,
+    campo: "precio_producto" | "precio_flete" | "comodato" | "observaciones_externas" | "montoReferencia",
+    valor: string
+  ) =>
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.codigo !== codigo) return it;
+        const actualizado = { ...it, [campo]: valor };
+        // Recalcula el margen SOLO con el monto_referencia de ESTE
+        // producto (nunca con montoVenta de toda la orden) — así cada
+        // tab del bloque muestra su margen individual real.
+        if (campo === "precio_producto" || campo === "precio_flete" || campo === "montoReferencia") {
+          const montoRefNum = actualizado.montoReferencia ? Number(actualizado.montoReferencia) : null;
+          const margenCalculado = calcularMargen(
+            actualizado.precio_producto,
+            it.cantidad,
+            actualizado.precio_flete,
+            montoRefNum
+          );
+          actualizado.margen = margenCalculado != null ? String(margenCalculado) : "";
+        }
+        return actualizado;
+      })
+    );
 
   const totalFlete = items.reduce((acc, it) => acc + (parseFloat(it.precio_flete) || 0), 0);
   const totalProductos = items.reduce((acc, it) => acc + (parseFloat(it.precio_producto) || 0), 0);
@@ -2594,6 +2648,7 @@ const [enviando, setEnviando] = useState(false);
             precio_flete: it.precio_flete ? parseFloat(it.precio_flete) : null,
             comodato: it.comodato || null,
             observaciones_externas: it.observaciones_externas || null,
+            margen: it.margen || null,
           })),
           datos_compartidos: {
             proveedor_nombre: compartido.proveedor_nombre,
@@ -2611,8 +2666,8 @@ const [enviando, setEnviando] = useState(false);
           codigo_venta: codigoVentaDe(venta),
         }),
       });
-      if (!r.ok) throw new Error((await r.json()).detail || "Error enviando en bloque");
-      mostrarToast("success", `${items.length} productos enviados para revisión ✅`);
+    if (!r.ok) throw new Error((await r.json()).detail || "Error enviando en bloque");
+      mostrarToast("success", `${items.length} productos enviados para revisión`);
       onEnviado();
       onCerrar();
     } catch (e) {
@@ -2624,8 +2679,22 @@ const [enviando, setEnviando] = useState(false);
     }
   };
 
+  // Un solo loader para cualquier operación en curso — nunca se mezclan
+  // spinners sueltos ni se puede cerrar el modal a medio guardar.
+  const procesando = enviando || confirmando || guardandoBloque || actualizandoErpBloque;
+  const mensajeProcesando = enviando
+    ? "Enviando productos para revisión…"
+    : confirmando
+    ? "Confirmando bloque en el ERP…"
+    : actualizandoErpBloque
+    ? "Actualizando información en el ERP…"
+    : guardandoBloque
+    ? "Guardando cambios del bloque…"
+    : "";
+
 return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      {procesando && <OverlayProcesando mensaje={mensajeProcesando} />}
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={onCerrar} />
       <div className="relative w-full max-w-[1600px] max-h-[92vh] overflow-y-auto bg-white rounded-2xl shadow-2xl">
         <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
@@ -2650,9 +2719,12 @@ return (
           </button>
         </div>
 
-        <div className="p-6 space-y-4">
+          <div className="p-6 space-y-4">
             <FormularioBloqueModal
               items={items}
+              productoInicial={productoInicial}
+              montoVenta={montoVenta}
+              procesando={procesando}
               actualizarItem={actualizarItem}
               compartido={{
                 proveedor_nombre: compartido.proveedor_nombre,
@@ -2777,7 +2849,7 @@ return (
                   setError("");
                   try {
                     await onActualizarErpBloque({ items, compartido, empresaId }, opProveedorId, opEmpresaId);
-                    mostrarToast("success", `Bloque de ${items.length} productos actualizado en el ERP ✅`);
+                    mostrarToast("success", `Bloque de ${items.length} productos actualizado en el ERP`);
                   } catch (e) {
                     const msg = e instanceof Error ? e.message : "Error actualizando el bloque en el ERP";
                     setError(msg);
@@ -2802,7 +2874,8 @@ return (
                   setError("");
                   try {
                     await onConfirmarBloque({ items, compartido, empresaId });
-                    onCerrar();
+                    // Confirmar NO cierra el modal — solo "enviar para
+                    // revisión" lo hace (ver la función enviar()).
                   } catch (e) {
                     const msg = e instanceof Error ? e.message : "Error confirmando el bloque";
                     setError(msg);
@@ -3169,6 +3242,23 @@ function FormularioCrearProveedor({
 
   const [imagenesPorProducto, setImagenesPorProducto] = useState<Record<string, ImagenProducto[]>>({});
 
+  const [detalleErpPorOp, setDetalleErpPorOp] = useState<Record<number, any>>({});
+
+  useEffect(() => {
+    if (!productoAbierto) return;
+    const codigo = productoAbierto;
+    const opResumen: any = (ops || []).find((op: any) =>
+      (op.productos || []).some((pr: any) => String(pr.codigo ?? "").trim() === codigo)
+    );
+    if (!opResumen || detalleErpPorOp[opResumen.id]) return;
+    fetch(`${API_BASE}/erp/ops/${opResumen.id}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setDetalleErpPorOp((prev) => ({ ...prev, [opResumen.id]: data }));
+      })
+      .catch(() => {});
+  }, [productoAbierto, ops]);
+
   const [modoSeleccion, setModoSeleccion] = useState(false);
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set());
   const [panelBloqueAbierto, setPanelBloqueAbierto] = useState(false);
@@ -3201,6 +3291,7 @@ function FormularioCrearProveedor({
 
 
   const [grupoBloqueAbierto, setGrupoBloqueAbierto] = useState<string | null>(null);
+  const [productoBloqueDestacado, setProductoBloqueDestacado] = useState<string | null>(null);
 
   // Si la notificación que abrió este drawer viene de un envío en
   // bloque, abre directo el panel de confirmación de ese bloque —
@@ -3210,8 +3301,9 @@ function FormularioCrearProveedor({
   useEffect(() => {
     if (grupoInicial) {
       setGrupoBloqueAbierto(grupoInicial);
+      setProductoBloqueDestacado(productoInicial || null);
     }
-  }, [grupoInicial]);
+  }, [grupoInicial, productoInicial]);
 
 
   useEffect(() => {
@@ -3222,6 +3314,54 @@ function FormularioCrearProveedor({
       .then((data) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: data })))
       .catch(() => {});
   }, [productoAbierto, venta?.id]);
+
+
+  // Si el producto se abre y NO tiene datos de Helbot (nadie llenó el
+// formulario todavía) pero SÍ existe ya una OP real en el ERP con
+// precio cargado ("Llenado directo en el ERP"), precargamos el
+// formulario con esos datos reales — así el usuario ve y puede
+// editar la información real, en vez de un formulario vacío o un
+// resumen de solo lectura.
+  useEffect(() => {
+    if (!productoAbierto) return;
+    const codigo = productoAbierto;
+    if (tocadosPorUsuario.has(codigo)) return; // no pisar lo que el usuario ya está editando
+
+    const formActual = forms[codigo];
+    if (formActual && (formActual.proveedor_nombre || formActual.precio_producto)) return; // ya tiene datos
+
+    const opResumen: any = (ops || []).find((op: any) =>
+      (op.productos || []).some(
+        (pr: any) => String(pr.codigo ?? "").trim() === codigo && Number(pr.precioUnitario) > 0
+      )
+    );
+    if (!opResumen) return; // nada real que precargar
+
+    const opReal: any = detalleErpPorOp[opResumen.id] || opResumen;
+
+    const productoErpReal = ((opReal.productos || []) as any[]).find(
+      (pr: any) => String(pr.codigo ?? "").trim() === codigo
+    );
+    const transporteErpReal = (opReal.transportesAsignados || [])[0];
+
+  setForms((f) => ({
+    ...f,
+    [codigo]: {
+      ...(f[codigo] || formularioVacio),
+      proveedor_nombre: f[codigo]?.proveedor_nombre || opReal.proveedor?.razonSocial || "",
+      proveedor_id: f[codigo]?.proveedor_id || (opReal.proveedorId != null ? String(opReal.proveedorId) : ""),
+      proveedor_telefono: f[codigo]?.proveedor_telefono || opReal.proveedor?.telefono || "",
+      precio_producto: f[codigo]?.precio_producto || (productoErpReal?.precioUnitario != null ? String(productoErpReal.precioUnitario) : ""),
+      agencia_transporte: f[codigo]?.agencia_transporte || transporteErpReal?.transporte?.razonSocial || "",
+      transporte_id: f[codigo]?.transporte_id || (transporteErpReal?.transporteId != null ? String(transporteErpReal.transporteId) : ""),
+      precio_flete: f[codigo]?.precio_flete || (transporteErpReal?.montoFlete != null ? String(transporteErpReal.montoFlete) : ""),
+      tipo_envio: f[codigo]?.tipo_envio || (transporteErpReal ? "AGENCIA" : "ENTIDAD"),
+      observaciones: f[codigo]?.observaciones || opReal.notaPedido || "",
+      empresa_id: f[codigo]?.empresa_id || (opReal.empresaId != null ? String(opReal.empresaId) : ""),
+      empresa_nombre: f[codigo]?.empresa_nombre || opReal.empresa?.razonSocial || "",
+    },
+  }));
+}, [productoAbierto, ops, detalleErpPorOp]);
 
 
 useEffect(() => {
@@ -3272,7 +3412,7 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
 
-  useEffect(() => {
+useEffect(() => {
 
     const inicial: Record<string, FormularioProducto> = {};
 
@@ -3284,7 +3424,7 @@ useEffect(() => {
         (s: any) => String(s.producto_codigo).trim() === codigo
       );
 
-  inicial[codigo] = {
+    inicial[codigo] = {
         proveedor_nombre: seg?.proveedor_nombre ?? "",
         proveedor_id: seg?.proveedor_id != null ? String(seg.proveedor_id) : "",
         proveedor_telefono: seg?.proveedor_telefono ?? "",
@@ -3297,6 +3437,8 @@ useEffect(() => {
         observaciones: seg?.observaciones ?? "",
         observaciones_transporte: seg?.observaciones_transporte ?? "",
         otras_observaciones: seg?.otras_observaciones ?? "",
+        margen: seg?.margen != null ? String(seg.margen) : "",
+        margen_orden: seg?.margen_orden != null ? String(seg.margen_orden) : "",
         tipo_envio: seg?.tipo_envio ?? "",
         // Si Seguimiento ya asignó una empresa a este producto, se
         // respeta. Si no, se precarga con la empresa de la orden
@@ -3346,6 +3488,8 @@ useEffect(() => {
         observaciones: seg.observaciones ?? "",
         observaciones_transporte: seg.observaciones_transporte ?? "",
         otras_observaciones: seg.otras_observaciones ?? "",
+        margen: seg.margen != null ? String(seg.margen) : "",
+        margen_orden: seg.margen_orden != null ? String(seg.margen_orden) : "",
         tipo_envio: seg.tipo_envio ?? "",
         empresa_id: seg.empresa_id != null ? String(seg.empresa_id) : String((venta as any).empresa?.id ?? ""),
         empresa_nombre: seg.empresa_nombre ?? (venta as any).empresa?.razonSocial ?? "",
@@ -3463,13 +3607,47 @@ const actualizarCampo = (
     valor: string
 ) => {
 
-    setForms(f => ({
-        ...f,
-        [codigo]: {
-            ...(f[codigo] || formularioVacio),
-            [campo]: valor,
+    setForms((f) => {
+      const actual = { ...(f[codigo] || formularioVacio), [campo]: valor };
+
+      // Recalcula el margen automáticamente cada vez que cambia el
+      // precio del producto o el flete — el usuario nunca lo escribe a
+      // mano. Usa montoVenta de la orden como referencia (caso 1
+      // producto por orden). Para órdenes con varios productos, este
+      // mismo valor por ahora es el margen "individual aproximado";
+      // el margen PROMEDIO de la orden se calcula aparte en
+      // PanelEnvioBloque/FormularioBloqueModal con el total del bloque.
+      if (campo === "precio_producto" || campo === "precio_flete") {
+        const productoVenta = (venta.productos || []).find(
+          (p: any) => String(p.codigo ?? p.id ?? "").trim() === codigo
+        );
+        // Orden con UN SOLO producto -> usa montoVenta de TODA la
+        // orden. Orden con VARIOS productos -> usa el "Monto importe"
+        // que Ventas cargó para ESE producto en CrearOrdenModal
+        // (seg.monto_referencia), nunca el montoVenta compartido.
+        const tieneVariosProductos = (venta.productos || []).length > 1;
+        let montoVentaOrden: number | null;
+        if (tieneVariosProductos) {
+          const seg = seguimientos.find(
+            (s: any) => String(s.producto_codigo).trim() === codigo
+          );
+          montoVentaOrden = seg?.monto_referencia != null && seg.monto_referencia !== ""
+            ? Number(seg.monto_referencia)
+            : null;
+        } else {
+          montoVentaOrden = montoDe(venta);
         }
-    }));
+        const margenCalculado = calcularMargen(
+          actual.precio_producto,
+          productoVenta?.cantidad,
+          actual.precio_flete,
+          montoVentaOrden
+        );
+        actual.margen = margenCalculado != null ? String(margenCalculado) : "";
+      }
+
+      return { ...f, [codigo]: actual };
+    });
 
     // Recién AHORA el usuario tocó este producto de verdad — a partir
     // de este momento sí hay que protegerlo de ser sobreescrito.
@@ -3528,19 +3706,14 @@ const guardarProducto = async (codigo: string) => {
 
         await cargarSeguimientos();
         setTocadosPorUsuario((prev) => { const n = new Set(prev); n.delete(codigo); return n; });
-        mostrarToast("success", "Datos enviados para revisión correctamente ✅");
+        mostrarToast("success", "Datos enviados para revisión correctamente");
         onFinalizado();
+        setProductoAbierto(null); // "Enviar para revisión" siempre cierra el formulario
 
     } catch (e) {
         const msg = e instanceof Error ? e.message : "Error desconocido";
         mostrarToast("error", msg);
         setError(msg);
-
-        setError(
-            e instanceof Error
-                ? e.message
-                : "Error desconocido"
-        );
 
     } finally {
 
@@ -3549,7 +3722,11 @@ const guardarProducto = async (codigo: string) => {
     }
 
 };
-const confirmarProductoForm = async (codigo: string, overrides?: Partial<FormularioProducto>) => {
+const confirmarProductoForm = async (
+  codigo: string,
+  overrides?: Partial<FormularioProducto>,
+  opciones?: { silencioso?: boolean }
+  ) => {
   setConfirmandoCodigo(codigo);
   setError("");
   try {
@@ -3605,18 +3782,17 @@ const confirmarProductoForm = async (codigo: string, overrides?: Partial<Formula
     if (!r.ok) throw new Error((await r.json()).detail || "Error confirmando");
     await cargarSeguimientos();
     setTocadosPorUsuario((prev) => { const n = new Set(prev); n.delete(codigo); return n; });
-    mostrarToast("success", "Producto confirmado y enviado al ERP ✅");   // <-- AGREGAR
+    if (!opciones?.silencioso) mostrarToast("success", "Producto confirmado y enviado al ERP");
     onFinalizado();
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error desconocido";
-    mostrarToast("error", msg);   // <-- AGREGAR
+    if (!opciones?.silencioso) mostrarToast("error", msg);
     setError(msg);
-    setError(e instanceof Error ? e.message : "Error desconocido");
+    throw e;
   } finally {
     setConfirmandoCodigo(null);
   }
 };
-
 
 const [empresaBloqueSeleccionada, setEmpresaBloqueSeleccionada] = useState<Record<string, string>>({});
 
@@ -3649,9 +3825,9 @@ const confirmarBloqueForm = async (grupoEnvioId: string) => {
         actualizarCampo(codigo, "empresa_id", overrides.empresa_id!);
         actualizarCampo(codigo, "empresa_nombre", overrides.empresa_nombre!);
       }
-      await confirmarProductoForm(codigo, overrides);
+    await confirmarProductoForm(codigo, overrides, { silencioso: true });
     }
-    mostrarToast("success", `Bloque de ${codigosDelGrupo.length} productos confirmado ✅`);
+    mostrarToast("success", `Bloque de ${codigosDelGrupo.length} productos confirmado`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error confirmando el bloque";
     mostrarToast("error", msg);
@@ -3681,6 +3857,7 @@ const confirmarBloqueDesdeModal = async (
       precio_flete: item.precio_flete,
       comodato: item.comodato,
       observaciones_externas: item.observaciones_externas,
+      margen: item.margen,
     };
     if (datos.empresaId) {
       overrides.empresa_id = datos.empresaId;
@@ -3689,9 +3866,9 @@ const confirmarBloqueDesdeModal = async (
     Object.entries(overrides).forEach(([campo, valor]) => {
       if (valor !== undefined) actualizarCampo(codigo, campo as keyof FormularioProducto, valor as string);
     });
-    await confirmarProductoForm(codigo, overrides);
+    await confirmarProductoForm(codigo, overrides, { silencioso: true });
   }
-  mostrarToast("success", `Bloque de ${datos.items.length} productos confirmado ✅`);
+  mostrarToast("success", `Bloque de ${datos.items.length} productos confirmado`);
 };
 
 
@@ -3731,6 +3908,7 @@ function armarOverridesBloque(
     precio_flete: item.precio_flete,
     comodato: item.comodato,
     observaciones_externas: item.observaciones_externas,
+    margen: item.margen,
   };
   if (empresaId) {
     overrides.empresa_id = empresaId;
@@ -3785,9 +3963,9 @@ const guardarCambiosBloqueDesdeModal = async (
     Object.entries(overrides).forEach(([campo, valor]) => {
       if (valor !== undefined) actualizarCampo(codigo, campo as keyof FormularioProducto, valor as string);
     });
-    await guardarCambiosSeguimientoForm(codigo, overrides);
+  await guardarCambiosSeguimientoForm(codigo, overrides, { silencioso: true });
   }
-  mostrarToast("success", `Cambios guardados en ${datos.items.length} productos del bloque ✅`);
+  mostrarToast("success", `Cambios guardados en ${datos.items.length} productos del bloque`);
 };
 // Bloque YA confirmado: guarda Y reenvía al ERP real cada producto del
 // grupo. Usa el mismo endpoint /actualizar-erp que ya usa "Actualizar
@@ -3806,12 +3984,16 @@ const actualizarErpBloqueDesdeModal = async (
     Object.entries(overrides).forEach(([campo, valor]) => {
       if (valor !== undefined) actualizarCampo(codigo, campo as keyof FormularioProducto, valor as string);
     });
-    await actualizarEnErpForm(codigo, overrides);
+    await actualizarEnErpForm(codigo, overrides, { silencioso: true });
   }
 };
 const [actualizandoErpCodigo, setActualizandoErpCodigo] = useState<string | null>(null);
 
-const actualizarEnErpForm = async (codigo: string, overrides?: Partial<FormularioProducto>) => {
+  const actualizarEnErpForm = async (
+    codigo: string,
+    overrides?: Partial<FormularioProducto>,
+    opciones?: { silencioso?: boolean }
+  ) => {
   setActualizandoErpCodigo(codigo);
   setError("");
   try {
@@ -3848,9 +4030,9 @@ const actualizarEnErpForm = async (codigo: string, overrides?: Partial<Formulari
     );
     if (!r.ok) throw new Error((await r.json()).detail || "Error actualizando en el ERP");
     const data = await r.json();
-    if (data.error_erp) {
+  if (data.error_erp) {
       const msgErp = `Se guardó en Helbot, pero el ERP respondió con error: ${data.error_erp}`;
-      mostrarToast("error", msgErp);
+      if (!opciones?.silencioso) mostrarToast("error", msgErp);
       setError(msgErp);
       // IMPORTANTE: aunque la respuesta HTTP sea 200, error_erp significa
       // que el ERP real NO se actualizó. Se relanza como error para que
@@ -3858,14 +4040,14 @@ const actualizarEnErpForm = async (codigo: string, overrides?: Partial<Formulari
       // este producto falló y no muestre un falso "todo bien".
       throw new Error(msgErp);
     } else {
-      mostrarToast("success", "Actualizado en el ERP correctamente ✅");
+      if (!opciones?.silencioso) mostrarToast("success", "Actualizado en el ERP correctamente");
     }
     await cargarSeguimientos();
     setTocadosPorUsuario((prev) => { const n = new Set(prev); n.delete(codigo); return n; });
     onFinalizado();
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error desconocido";
-    mostrarToast("error", msg);
+    if (!opciones?.silencioso) mostrarToast("error", msg);
     setError(msg);
     // Antes el error se quedaba solo en este catch y nunca se propagaba
     // — por eso el bloque terminaba el loop y mostraba éxito aunque un
@@ -3878,7 +4060,12 @@ const actualizarEnErpForm = async (codigo: string, overrides?: Partial<Formulari
 };
 
 
-const guardarCambiosSeguimientoForm = async (codigo: string, overrides?: Partial<FormularioProducto>) => {
+const guardarCambiosSeguimientoForm = async (
+  codigo: string,
+  overrides?: Partial<FormularioProducto>,
+  opciones?: { silencioso?: boolean }
+) => {
+
   setGuardandoCodigo(codigo);
   setError("");
   try {
@@ -3915,13 +4102,13 @@ const guardarCambiosSeguimientoForm = async (codigo: string, overrides?: Partial
     if (!r.ok) throw new Error((await r.json()).detail || "Error guardando cambios");
     await cargarSeguimientos();
     setTocadosPorUsuario((prev) => { const n = new Set(prev); n.delete(codigo); return n; });
-    mostrarToast("success", "Cambios guardados ✅");   // <-- AGREGAR
+    if (!opciones?.silencioso) mostrarToast("success", "Cambios guardados");
     onFinalizado();
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error desconocido";
-    mostrarToast("error", msg);   // <-- AGREGAR
+    if (!opciones?.silencioso) mostrarToast("error", msg);
     setError(msg);
-    setError(e instanceof Error ? e.message : "Error desconocido");
+    throw e;
   } finally {
     setGuardandoCodigo(null);
   }
@@ -4018,6 +4205,7 @@ return (
             venta={venta}
             codigosSeleccionados={[]}
             seguimientosGrupo={productosDelGrupo}
+            todosSeguimientos={seguimientos}
             proveedores={proveedores}
             transportes={transportes}
             agregarProveedor={agregarProveedor}
@@ -4033,10 +4221,12 @@ return (
             }
             opProveedorId={opReal ? opReal.proveedorId : undefined}
             opEmpresaId={opReal ? opReal.empresaId : undefined}
+            productoInicial={productoBloqueDestacado}
+            montoVenta={Number((venta as any)?.montoVenta) || null}
             onConfirmarBloque={confirmarBloqueDesdeModal}
             onGuardarCambiosBloque={guardarCambiosBloqueDesdeModal}
             onActualizarErpBloque={actualizarErpBloqueDesdeModal}
-            onCerrar={() => setGrupoBloqueAbierto(null)}
+            onCerrar={() => { setGrupoBloqueAbierto(null); setProductoBloqueDestacado(null); }}
             onEnviado={() => {
               cargarSeguimientos();
               onFinalizado();
@@ -4077,6 +4267,41 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
     const opReal: any = (ops || []).find((op: any) =>
       (op.productos || []).some((pr: any) => String(pr.codigo ?? "").trim() === codigo)
     );
+
+
+    const detalleOpReal = opReal ? detalleErpPorOp[opReal.id] : null;
+    const transporteDetalle = detalleOpReal ? (detalleOpReal.transportesAsignados || [])[0] : null;
+  const evidenciaErp = detalleOpReal
+  ? {
+      cotizacionTransporte: transporteDetalle?.cotizacionTransporte || null,
+      guiaRemision: transporteDetalle?.guiaRemision || null,
+      archivoFactura: transporteDetalle?.archivoFactura || null,
+      otros: detalleOpReal?.notaAdicional || null,
+      pagos: (detalleOpReal.pagos || []).map((p: any) => ({
+        id: p.id,
+        archivoPago: p.archivoPago || null,
+        descripcionPago: p.descripcionPago || null,
+        montoPago: p.montoPago ?? null,
+
+        // Campos reales que vienen del fetch
+        fecha: p.fechaPago || null,
+        banco: p.bancoPago || null,
+        encargado: p.encargadoPago || null,
+        verificado: !!p.estadoPago,
+
+        // Opcional: conservar también los nombres originales
+        fechaPago: p.fechaPago || null,
+        bancoPago: p.bancoPago || null,
+        encargadoPago: p.encargadoPago || null,
+        estadoPago: !!p.estadoPago,
+
+        createdAt: p.createdAt || null,
+        updatedAt: p.updatedAt || null,
+      })),
+    }
+  : null;
+
+
 
     const seg =
       seguimientos.find(
@@ -4176,7 +4401,7 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                 return (
                   <button
                     type="button"
-                    onClick={() => setGrupoBloqueAbierto(grupoEnvioActual)}
+                    onClick={() => { setGrupoBloqueAbierto(grupoEnvioActual); setProductoBloqueDestacado(null); }}
                     className="w-full text-left flex items-center justify-between flex-wrap gap-x-2 gap-y-0.5 mb-1.5 mt-3 first:mt-0 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
                   >
                     <p className="text-[11px] font-bold text-amber-700 uppercase tracking-wide flex items-center gap-1.5">
@@ -4223,7 +4448,7 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                 className="w-4 h-4 rounded border-slate-300 text-[#4F46E5] focus:ring-indigo-500 shrink-0 disabled:opacity-30"
               />
             )}
-            <button
+          <button
               onClick={() => {
                 // Un producto que pertenece a un envío en bloque SIEMPRE
                 // abre el modal del bloque completo al hacer clic —sin
@@ -4233,6 +4458,7 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                 // el clic caía al modal de un solo producto por error.
                 if (seg.grupo_envio_id) {
                   setGrupoBloqueAbierto(seg.grupo_envio_id);
+                  setProductoBloqueDestacado(codigo);
                   return;
                 }
                 setProductoAbierto(abierto ? null : codigo);
@@ -4307,6 +4533,7 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                         onClick={(e) => {
                           e.stopPropagation();
                           setGrupoBloqueAbierto(seg.grupo_envio_id);
+                          setProductoBloqueDestacado(codigo);
                         }}
                         className="flex items-center gap-1 text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap"
                       >
@@ -4326,102 +4553,92 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
            
             </div>
 
-              {abierto && (
-                opReal && !vinoDelFormulario ? (
-                  <ModalDetalleProductoErpReal
-                    p={p}
-                    opReal={opReal}
-                    productoErpReal={productoErpReal}
-                    urlOce={venta.documentoOce}
-                    urlOcf={venta.documentoOcf}
-                    onCerrar={() => setProductoAbierto(null)}
+            {abierto && (
+              <FormularioProductoModal
+                codigo={codigo}
+                evidenciaErp={evidenciaErp}
+                nombreProducto={p.codigo}
+                descripcionProducto={p.descripcion}
+                cantidad={cantidadMostrar}
+                unidadMedida={p.unidadMedida}
+                form={form}
+                actualizarCampo={actualizarCampo}
+                soloLectura={soloLectura}
+                proveedores={proveedores}
+                transportes={transportes}
+                cargandoProveedores={cargandoProveedores}
+                cargandoTransportes={cargandoTransportes}
+                empresas={empresas}
+                cargandoEmpresas={cargandoEmpresas}
+                esSeguimiento={esSeguimiento}
+                onCrearProveedor={() => setModalProveedorPara(codigo)}
+                onCrearTransporte={() => setModalTransportePara(codigo)}
+                ordenCompraId={Number(venta.id)}
+                imagenes={imagenesPorProducto[codigo] || []}
+                onCambiarImagenes={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
+                urlOce={venta.documentoOce}
+                urlOcf={venta.documentoOcf}
+                estado={(seg.estado as "pendiente" | "preview" | "confirmado" | "subido") || "pendiente"}
+                rellenadoPor={seg.rellenado_por}
+                confirmadoPor={seg.confirmado_por}
+                pdfConsolidadoUrl={seg.pdf_consolidado_url}
+                guardando={guardandoCodigo === codigo}
+                confirmando={confirmandoCodigo === codigo}
+                actualizandoErp={actualizandoErpCodigo === codigo}
+                onEnviarParaRevision={() => guardarProducto(codigo)}
+                onGuardarCambios={() => guardarCambiosSeguimientoForm(codigo)}
+                onConfirmar={() => confirmarProductoForm(codigo)}
+                onActualizarErp={() => actualizarEnErpForm(codigo)}
+                onCerrar={() => setProductoAbierto(null)}
+                renderBuscadorProveedor={() => (
+                  <BuscadorEntidad<ProveedorOption>
+                    label="Proveedor"
+                    value={form.proveedor_nombre}
+                    onChange={(v) => actualizarCampo(codigo, "proveedor_nombre", v)}
+                    onSeleccionar={(prov) => {
+                      actualizarCampo(codigo, "proveedor_nombre", prov.razonSocial);
+                      actualizarCampo(codigo, "proveedor_id", String(prov.id));
+                      if (prov.telefono) actualizarCampo(codigo, "proveedor_telefono", prov.telefono);
+                    }}
+                    opciones={proveedores}
+                    cargando={cargandoProveedores}
+                    disabled={soloLectura}
+                    placeholder="Buscar proveedor por razón social..."
+                    seleccionado={proveedores.find((pv) => pv.razonSocial === form.proveedor_nombre) || null}
+                    onCrearNuevo={() => setModalProveedorPara(codigo)}
                   />
-                ) : (
-                  <FormularioProductoModal
-                    codigo={codigo}
-                    nombreProducto={p.codigo}
-                    descripcionProducto={p.descripcion}
-                    cantidad={cantidadMostrar}
-                    unidadMedida={p.unidadMedida}
-                    form={form}
-                    actualizarCampo={actualizarCampo}
-                    soloLectura={soloLectura}
-                    proveedores={proveedores}
-                    transportes={transportes}
-                    cargandoProveedores={cargandoProveedores}
-                    cargandoTransportes={cargandoTransportes}
-                    empresas={empresas}
-                    cargandoEmpresas={cargandoEmpresas}
-                    esSeguimiento={esSeguimiento}
-                    onCrearProveedor={() => setModalProveedorPara(codigo)}
-                    onCrearTransporte={() => setModalTransportePara(codigo)}
+                )}
+                renderBuscadorTransporte={() => (
+                  <BuscadorEntidad<TransporteOption>
+                    label="Agencia transporte"
+                    value={form.agencia_transporte}
+                    onChange={(v) => actualizarCampo(codigo, "agencia_transporte", v)}
+                    onSeleccionar={(t) => {
+                      actualizarCampo(codigo, "agencia_transporte", t.razonSocial);
+                      actualizarCampo(codigo, "transporte_id", String(t.id));
+                    }}
+                    opciones={transportes}
+                    cargando={cargandoTransportes}
+                    disabled={soloLectura}
+                    placeholder="Buscar agencia de transporte..."
+                    seleccionado={transportes.find((tp) => tp.razonSocial === form.agencia_transporte) || null}
+                    onCrearNuevo={() => setModalTransportePara(codigo)}
+                  />
+                )}
+                renderContactoProveedor={() => (
+                  <ContactoProveedorInfo proveedorId={form.proveedor_id ? parseInt(form.proveedor_id, 10) : null} />
+                )}
+                renderSelectorImagenes={() => (
+                  <SelectorImagenes
                     ordenCompraId={Number(venta.id)}
+                    codigo={codigo}
                     imagenes={imagenesPorProducto[codigo] || []}
-                    onCambiarImagenes={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
-                    urlOce={venta.documentoOce}
-                    urlOcf={venta.documentoOcf}
-                    estado={(seg.estado as "pendiente" | "preview" | "confirmado" | "subido") || "pendiente"}
-                    rellenadoPor={seg.rellenado_por}
-                    confirmadoPor={seg.confirmado_por}
-                    pdfConsolidadoUrl={seg.pdf_consolidado_url}
-                    guardando={guardandoCodigo === codigo}
-                    confirmando={confirmandoCodigo === codigo}
-                    actualizandoErp={actualizandoErpCodigo === codigo}
-                    onEnviarParaRevision={() => guardarProducto(codigo)}
-                    onGuardarCambios={() => guardarCambiosSeguimientoForm(codigo)}
-                    onConfirmar={() => confirmarProductoForm(codigo)}
-                    onActualizarErp={() => actualizarEnErpForm(codigo)}
-                    onCerrar={() => setProductoAbierto(null)}
-                    renderBuscadorProveedor={() => (
-                      <BuscadorEntidad<ProveedorOption>
-                        label="Proveedor"
-                        value={form.proveedor_nombre}
-                        onChange={(v) => actualizarCampo(codigo, "proveedor_nombre", v)}
-                        onSeleccionar={(prov) => {
-                          actualizarCampo(codigo, "proveedor_nombre", prov.razonSocial);
-                          actualizarCampo(codigo, "proveedor_id", String(prov.id));
-                          if (prov.telefono) actualizarCampo(codigo, "proveedor_telefono", prov.telefono);
-                        }}
-                        opciones={proveedores}
-                        cargando={cargandoProveedores}
-                        disabled={soloLectura}
-                        placeholder="Buscar proveedor por razón social..."
-                        seleccionado={proveedores.find((pv) => pv.razonSocial === form.proveedor_nombre) || null}
-                        onCrearNuevo={() => setModalProveedorPara(codigo)}
-                      />
-                    )}
-                    renderBuscadorTransporte={() => (
-                      <BuscadorEntidad<TransporteOption>
-                        label="Agencia transporte"
-                        value={form.agencia_transporte}
-                        onChange={(v) => actualizarCampo(codigo, "agencia_transporte", v)}
-                        onSeleccionar={(t) => {
-                          actualizarCampo(codigo, "agencia_transporte", t.razonSocial);
-                          actualizarCampo(codigo, "transporte_id", String(t.id));
-                        }}
-                        opciones={transportes}
-                        cargando={cargandoTransportes}
-                        disabled={soloLectura}
-                        placeholder="Buscar agencia de transporte..."
-                        seleccionado={transportes.find((tp) => tp.razonSocial === form.agencia_transporte) || null}
-                        onCrearNuevo={() => setModalTransportePara(codigo)}
-                      />
-                    )}
-                    renderContactoProveedor={() => (
-                      <ContactoProveedorInfo proveedorId={form.proveedor_id ? parseInt(form.proveedor_id, 10) : null} />
-                    )}
-                    renderSelectorImagenes={() => (
-                      <SelectorImagenes
-                        ordenCompraId={Number(venta.id)}
-                        codigo={codigo}
-                        imagenes={imagenesPorProducto[codigo] || []}
-                        onCambio={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
-                        disabled={soloLectura}
-                      />
-                    )}
+                    onCambio={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
+                    disabled={soloLectura}
                   />
-                )
-              )}
+                )}
+              />
+            )}
                   </div>
               </Fragment>
             );
@@ -4442,10 +4659,11 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
           </div>
         )}
 
-      {panelBloqueAbierto && (
+        {panelBloqueAbierto && (
           <PanelEnvioBloque
             venta={venta}
             codigosSeleccionados={Array.from(seleccionados)}
+            todosSeguimientos={seguimientos}
             proveedores={proveedores}
             transportes={transportes}
             agregarProveedor={agregarProveedor}

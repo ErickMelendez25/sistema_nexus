@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   X, Loader2, Send, ShieldCheck, RefreshCw, FileText, Package,
   Building2, Users, MessageSquareText, AlertTriangle, CheckCircle2,
+  Image as ImageIcon, Calendar, Landmark, UserCheck,
 } from "lucide-react";
 import { EmpresaOption } from "./erp-shared";
 
@@ -51,11 +52,12 @@ interface FormularioProducto {
   observaciones: string;
   observaciones_transporte: string;
   otras_observaciones: string;
+  margen: string;
+  margen_orden: string;
   tipo_envio: string;
   empresa_id: string;
   empresa_nombre: string;
 }
-
 interface ImagenProducto {
   id: number;
   ruta_archivo: string;
@@ -116,6 +118,23 @@ interface Props {
   onConfirmar?: () => void;               // seguimiento, estado preview
   onActualizarErp?: () => void;           // seguimiento, estado confirmado/subido
 
+  evidenciaErp?: {
+    cotizacionTransporte?: string | null;
+    guiaRemision?: string | null;
+    archivoFactura?: string | null;
+    otros?: string | null;
+    pagos?: {
+      id: number;
+      archivoPago?: string | null;
+      descripcionPago?: string | null;
+      montoPago?: number;
+      fecha?: string | null;
+      banco?: string | null;
+      encargado?: string | null;
+      verificado?: boolean;
+    }[];
+  } | null;
+
   onCerrar: () => void;
 
   // Buscador reutilizado (se pasa como render-prop para no duplicar
@@ -168,6 +187,7 @@ export default function FormularioProductoModal({
   onConfirmar,
   onActualizarErp,
   onCerrar,
+  evidenciaErp,
   renderBuscadorProveedor,
   renderBuscadorTransporte,
   renderContactoProveedor,
@@ -177,6 +197,16 @@ export default function FormularioProductoModal({
 }: Props) {
   const faltantes = faltantesDe(form);
   const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
+  const [visorEvidencia, setVisorEvidencia] = useState<{ url: string; titulo: string } | null>(null);
+
+  useEffect(() => {
+    if (!visorEvidencia) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setVisorEvidencia(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [visorEvidencia]);
 
   // Click en el tipo ya seleccionado = deseleccionar (vuelve a "sin elegir")
   const elegirTipoEnvio = (tipo: "ENTIDAD" | "AGENCIA") => {
@@ -189,7 +219,8 @@ export default function FormularioProductoModal({
     actualizarCampo(codigo, "observaciones", tipo === "AGENCIA" ? TEXTO_OBS_AGENCIA : TEXTO_OBS_ENTIDAD);
   };
 
-  return (
+return (
+    <>
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={onCerrar} />
       <div className="relative w-full max-w-[1800px] h-[92vh] overflow-hidden bg-white rounded-2xl shadow-2xl flex flex-col">
@@ -423,9 +454,110 @@ export default function FormularioProductoModal({
                     <p className="text-[13px] font-bold text-[#4F46E5]">4. Fotos y documentos</p>
                   </div>
                   {renderSelectorImagenes()}
+                  {evidenciaErp && (evidenciaErp.cotizacionTransporte || evidenciaErp.archivoFactura || evidenciaErp.guiaRemision || evidenciaErp.otros || (evidenciaErp.pagos && evidenciaErp.pagos.length > 0)) && (
+                    <div className="space-y-2.5">
+                      {/* --- Evidencia de transporte --- */}
+                      {(evidenciaErp.cotizacionTransporte || evidenciaErp.guiaRemision || evidenciaErp.archivoFactura || evidenciaErp.otros) && (
+                        <div className="rounded-lg bg-violet-50/60 border border-violet-200 px-3 py-2.5 space-y-1.5">
+                          <p className="text-[10px] font-semibold text-violet-700 uppercase tracking-wide flex items-center gap-1">
+                            <ShieldCheck size={11} /> Evidencia de transporte (ERP)
+                          </p>
+                          {evidenciaErp.cotizacionTransporte && (
+                            <button
+                              type="button"
+                              onClick={() => setVisorEvidencia({ url: evidenciaErp.cotizacionTransporte!, titulo: "Cotización de transporte" })}
+                              className="flex items-center gap-1.5 text-left w-full text-[11px] text-violet-700 hover:underline"
+                            >
+                              <IconoArchivo url={evidenciaErp.cotizacionTransporte} /> Cotización de transporte
+                            </button>
+                          )}
+                          {evidenciaErp.guiaRemision && (
+                            <button
+                              type="button"
+                              onClick={() => setVisorEvidencia({ url: evidenciaErp.guiaRemision!, titulo: "Guía de remisión" })}
+                              className="flex items-center gap-1.5 text-left w-full text-[11px] text-violet-700 hover:underline"
+                            >
+                              <IconoArchivo url={evidenciaErp.guiaRemision} /> Guía de remisión
+                            </button>
+                          )}
+                          {evidenciaErp.archivoFactura && (
+                            <button
+                              type="button"
+                              onClick={() => setVisorEvidencia({ url: evidenciaErp.archivoFactura!, titulo: "Factura de transporte" })}
+                              className="flex items-center gap-1.5 text-left w-full text-[11px] text-violet-700 hover:underline"
+                            >
+                              <IconoArchivo url={evidenciaErp.archivoFactura} /> Factura de transporte
+                            </button>
+                          )}
+                          {evidenciaErp.otros && (
+                            <div className="pt-1 mt-1 border-t border-violet-200/60">
+                              <p className="text-[10px] font-semibold text-violet-700 uppercase tracking-wide mb-0.5">Otros</p>
+                              <p className="text-[11px] text-slate-700 whitespace-pre-wrap">{evidenciaErp.otros}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* --- Pagos al proveedor --- */}
+                      {evidenciaErp.pagos && evidenciaErp.pagos.length > 0 && (
+                        <div className="rounded-lg bg-emerald-50/60 border border-emerald-200 px-3 py-2.5 space-y-2">
+                          <p className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wide flex items-center gap-1">
+                            <ShieldCheck size={11} /> Pagos al proveedor (ERP)
+                          </p>
+                          {evidenciaErp.pagos.map((p) => (
+                            <div key={p.id} className="rounded-lg bg-white border border-emerald-200/70 px-2.5 py-2 space-y-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-[11px] font-bold text-slate-800 truncate">
+                                  {p.descripcionPago || "Pago"}
+                                </p>
+                                {p.montoPago != null && (
+                                  <span className="text-[11px] font-bold text-emerald-700 shrink-0">
+                                    S/ {Number(p.montoPago).toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500">
+                                {p.fecha && (
+                                  <span className="flex items-center gap-1">
+                                    <Calendar size={11} />
+                                    {new Date(p.fecha).toLocaleDateString("es-PE", {
+                                      timeZone: "UTC",
+                                      day: "numeric",
+                                      month: "long",
+                                      year: "numeric",
+                                    })}
+                                  </span>
+                                )}
+                                {p.banco && (
+                                  <span className="flex items-center gap-1"><Landmark size={11} /> {p.banco}</span>
+                                )}
+                                {p.encargado && (
+                                  <span className="flex items-center gap-1"><UserCheck size={11} /> {p.encargado}</span>
+                                )}
+                                {p.verificado && (
+                                  <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+                                    <CheckCircle2 size={11} /> Verificado
+                                  </span>
+                                )}
+                              </div>
+                              {p.archivoPago && (
+                                <button
+                                  type="button"
+                                  onClick={() => setVisorEvidencia({ url: p.archivoPago!, titulo: p.descripcionPago || "Comprobante de pago" })}
+                                  className="flex items-center gap-1.5 text-left text-[11px] text-emerald-700 hover:underline pt-0.5"
+                                >
+                                  <IconoArchivo url={p.archivoPago} /> Ver comprobante
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {pdfConsolidadoUrl && !(esSeguimiento && (estado === "confirmado" || estado === "subido")) && (
-                    <a
-                      href={pdfConsolidadoUrl}
+                    
+                    <a href={pdfConsolidadoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
@@ -434,6 +566,23 @@ export default function FormularioProductoModal({
                       <FileText size={13} /> Ver PDF consolidado
                     </a>
                   )}
+
+                  <div
+                    className={`rounded-xl border-2 px-4 py-5 text-center transition-colors ${
+                      !form.margen
+                        ? "bg-slate-50 border-dashed border-slate-300 text-slate-400"
+                        : Number(form.margen) < 8
+                        ? "bg-red-50 border-red-300 text-red-700"
+                        : Number(form.margen) < 10
+                        ? "bg-amber-50 border-amber-300 text-amber-700"
+                        : "bg-emerald-50 border-emerald-300 text-emerald-700"
+                    }`}
+                  >
+                    <p className="text-xs font-bold uppercase tracking-wide opacity-80 mb-1">Margen</p>
+                    <p className="text-4xl font-extrabold leading-none">
+                      {form.margen ? `${Number(form.margen).toFixed(2)}%` : "Sin monto de venta"}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -552,9 +701,29 @@ export default function FormularioProductoModal({
         </div>
       </div>
     </div>
+    {visorEvidencia && (
+      <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setVisorEvidencia(null)} />
+        <div className="relative w-full max-w-4xl h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+          <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-100">
+            <p className="text-sm font-bold text-slate-900 truncate">{visorEvidencia.titulo}</p>
+            <button onClick={() => setVisorEvidencia(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 bg-slate-100">
+            {/\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(visorEvidencia.url) ? (
+              <img src={visorEvidencia.url} alt={visorEvidencia.titulo} className="w-full h-full object-contain" />
+            ) : (
+              <iframe src={`${visorEvidencia.url}#navpanes=0&toolbar=0&statusbar=0`} className="w-full h-full" title={visorEvidencia.titulo} />
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
-
 /* ============================================================
    Visor de documentos — pestañas OCE / OCF con iframe de PDF.
    Copiado del mismo componente que ya usas en CrearOrdenModal.tsx,
@@ -642,6 +811,13 @@ export function VisorDocumentos({
       </div>
     </div>
   );
+}
+
+
+
+function IconoArchivo({ url, size = 12 }: { url: string; size?: number }) {
+  const esImagen = /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(url);
+  return esImagen ? <ImageIcon size={size} /> : <FileText size={size} />;
 }
 
 function CampoSimple({

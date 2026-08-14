@@ -368,3 +368,68 @@ export const subirDocumento = async (archivo: File, tipo: "OCE" | "OCF"): Promis
   const data = await r.json();
   return data.url as string;
 };
+
+// Monto de referencia (importe) POR PRODUCTO — usado cuando la orden
+// tiene varios productos, para que cada uno calcule su propio margen.
+// Nunca se manda al ERP, solo vive en MySQL de Helbot (igual que
+// 'comodato').
+export interface ProductoMontoReferencia {
+  codigo: string;
+  monto_referencia: number | null;
+}
+
+export const guardarMontosReferenciaProductos = async (
+  ordenCompraId: number,
+  productos: ProductoMontoReferencia[]
+): Promise<void> => {
+  const r = await fetchConToken(`${API_BASE}/erp/ordenes/${ordenCompraId}/productos/montos-referencia`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ productos }),
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.detail || `Error ${r.status} guardando montos de referencia`);
+  }
+};
+
+
+
+
+// Lee los montos de referencia por producto ya guardados para esta
+// orden — contraparte de guardarMontosReferenciaProductos(). SUPUESTO:
+// asumo que el backend responde { productos: [...] } igual que el
+// payload que le mandas en el POST. Si tu router de FastAPI devuelve
+// otra forma (ej. un array plano), ajusta la línea `return (data...`.
+export const obtenerMontosReferenciaProductos = async (
+  ordenCompraId: number
+): Promise<ProductoMontoReferencia[]> => {
+  const r = await fetchConToken(`${API_BASE}/erp/ordenes/${ordenCompraId}/productos/montos-referencia`);
+  if (!r.ok) {
+    if (r.status === 404) return [];
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.detail || `Error ${r.status} obteniendo montos de referencia`);
+  }
+  const data = await r.json();
+  return (data.productos ?? data) as ProductoMontoReferencia[];
+};
+// ============================================================
+// Margen — nunca se manda al ERP, solo se guarda en MySQL (Helbot),
+// igual que 'comodato'.
+// ============================================================
+export function calcularMargenDesdeTotales(costoTotal: number, montoReferencia: number | null): number | null {
+  if (!montoReferencia) return null;
+  return ((montoReferencia - costoTotal) / montoReferencia) * 100;
+}
+
+export function calcularMargen(
+  precioProducto: string,
+  cantidad: number | string | undefined,
+  precioFlete: string,
+  montoReferencia: number | null
+): number | null {
+  const precio = parseFloat(precioProducto) || 0;
+  const cant = Number(cantidad) || 0;
+  const flete = parseFloat(precioFlete) || 0;
+  return calcularMargenDesdeTotales(precio * cant + flete, montoReferencia);
+}
