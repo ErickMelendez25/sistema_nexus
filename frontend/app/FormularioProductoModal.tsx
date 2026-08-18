@@ -53,6 +53,7 @@ interface FormularioProducto {
   observaciones_transporte: string;
   otras_observaciones: string;
   margen: string;
+  motivo_margen: string;
   margen_orden: string;
   tipo_envio: string;
   empresa_id: string;
@@ -579,8 +580,8 @@ return (
                     }`}
                   >
                     <p className="text-xs font-bold uppercase tracking-wide opacity-80 mb-1">Margen</p>
-                    <p className="text-4xl font-extrabold leading-none">
-                      {form.margen ? `${Number(form.margen).toFixed(2)}%` : "Sin monto de venta"}
+                    <p className={form.margen ? "text-4xl font-extrabold leading-none" : "text-base font-semibold leading-snug"}>
+                      {form.margen ? `${Number(form.margen).toFixed(2)}%` : (form.motivo_margen || "Sin monto de venta")}
                     </p>
                   </div>
                 </div>

@@ -1403,8 +1403,10 @@ interface FormularioProducto {
   observaciones: string;
   observaciones_transporte: string;
   otras_observaciones: string;   // NUEVO — va al campo "observaciones" de la OP
-  margen: string;                // NUEVO — calculado, nunca lo edita el usuario a mano
-  margen_orden: string;          // NUEVO — margen promedio de la orden (envíos en bloque)
+            // NUEVO — calculado, nunca lo edita el usuario a mano
+  margen: string;
+  motivo_margen: string;
+  margen_orden: string;
   tipo_envio: string;
   empresa_id: string;
   empresa_nombre: string;
@@ -1424,11 +1426,66 @@ const formularioVacio: FormularioProducto = {
   observaciones_transporte: "",
   otras_observaciones: "",
   margen: "",
+  motivo_margen: "",
   margen_orden: "",
   tipo_envio: "",
   empresa_id: "",
   empresa_nombre: "",
 };
+
+
+
+// Calcula el margen de UN producto y, si no se puede, arma el motivo
+// EXACTO (para reemplazar el genérico "Sin monto de venta") — distingue
+// entre: falta precio, falta monto de venta (orden de 1 producto), o
+// falta monto de referencia (orden de varios productos).
+function calcularMargenConMotivo(
+  codigo: string,
+  precioProducto: string,
+  precioFlete: string,
+  venta: VentaErp,
+  seguimientos: any[]
+): { margen: string; motivo: string } {
+  const productoVenta = (venta.productos || []).find(
+    (p: any) => String(p.codigo ?? p.id ?? "").trim() === codigo
+  );
+  const tieneVariosProductos = (venta.productos || []).length > 1;
+
+  let montoVentaOrden: number | null = null;
+  let motivo = "";
+
+  if (tieneVariosProductos) {
+    const seg = seguimientos.find(
+      (s: any) => String(s.producto_codigo).trim() === codigo
+    );
+    if (seg?.monto_referencia != null && seg.monto_referencia !== "") {
+      montoVentaOrden = Number(seg.monto_referencia);
+    } else {
+      motivo = "Monto de referencia no fue registrado en la orden";
+    }
+  } else {
+    montoVentaOrden = montoDe(venta);
+    if (montoVentaOrden == null) {
+      motivo = "Monto de venta no fue registrado en la orden";
+    }
+  }
+
+  if (!precioProducto?.trim()) {
+    motivo = "Falta ingresar el precio del producto";
+  }
+
+  const margenCalculado = calcularMargen(
+    precioProducto,
+    productoVenta?.cantidad,
+    precioFlete,
+    montoVentaOrden
+  );
+
+  return {
+    margen: margenCalculado != null ? String(margenCalculado) : "",
+    motivo: margenCalculado != null ? "" : (motivo || "Sin monto de venta"),
+  };
+}
 
 
 const TEXTO_OBS_AGENCIA =
@@ -1911,6 +1968,7 @@ function DetalleOp({
           observaciones_transporte: seg?.observaciones_transporte || "",
           otras_observaciones: seg?.otras_observaciones || "",
           margen: seg?.margen != null ? String(seg.margen) : "",
+          motivo_margen: "",
           margen_orden: seg?.margen_orden != null ? String(seg.margen_orden) : "",
           tipo_envio: seg?.tipo_envio || "",
           empresa_id: seg?.empresa_id != null ? String(seg.empresa_id) : "",
@@ -3424,26 +3482,33 @@ useEffect(() => {
         (s: any) => String(s.producto_codigo).trim() === codigo
       );
 
+    const precioProductoStr = seg?.precio_producto != null ? String(seg.precio_producto) : "";
+    const precioFleteStr = seg?.precio_flete != null ? String(seg.precio_flete) : "";
+    const { margen: margenCalc, motivo: motivoCalc } = calcularMargenConMotivo(
+      codigo,
+      precioProductoStr,
+      precioFleteStr,
+      venta,
+      seguimientos
+    );
+
     inicial[codigo] = {
         proveedor_nombre: seg?.proveedor_nombre ?? "",
         proveedor_id: seg?.proveedor_id != null ? String(seg.proveedor_id) : "",
         proveedor_telefono: seg?.proveedor_telefono ?? "",
-        precio_producto: seg?.precio_producto != null ? String(seg.precio_producto) : "",
+        precio_producto: precioProductoStr,
         comodato: seg?.comodato ?? "",
         observaciones_externas: seg?.observaciones_externas ?? "",
         agencia_transporte: seg?.agencia_transporte ?? "",
         transporte_id: seg?.transporte_id != null ? String(seg.transporte_id) : "",
-        precio_flete: seg?.precio_flete != null ? String(seg.precio_flete) : "",
+        precio_flete: precioFleteStr,
         observaciones: seg?.observaciones ?? "",
         observaciones_transporte: seg?.observaciones_transporte ?? "",
         otras_observaciones: seg?.otras_observaciones ?? "",
-        margen: seg?.margen != null ? String(seg.margen) : "",
+        margen: margenCalc,
+        motivo_margen: motivoCalc,
         margen_orden: seg?.margen_orden != null ? String(seg.margen_orden) : "",
         tipo_envio: seg?.tipo_envio ?? "",
-        // Si Seguimiento ya asignó una empresa a este producto, se
-        // respeta. Si no, se precarga con la empresa de la orden
-        // principal — así "todos jalan la empresa con la que fue
-        // creada la orden" pasa automáticamente al inicio.
         empresa_id: seg?.empresa_id != null ? String(seg.empresa_id) : String((venta as any).empresa?.id ?? ""),
         empresa_nombre: seg?.empresa_nombre ?? (venta as any).empresa?.razonSocial ?? "",
       };
@@ -3475,20 +3540,31 @@ useEffect(() => {
 
       if (!seg) continue;
 
+const precioProductoStr = seg.precio_producto != null ? String(seg.precio_producto) : "";
+    const precioFleteStr = seg.precio_flete != null ? String(seg.precio_flete) : "";
+    const { margen: margenCalc, motivo: motivoCalc } = calcularMargenConMotivo(
+      codigo,
+      precioProductoStr,
+      precioFleteStr,
+      venta,
+      seguimientos
+    );
+
     nuevo[codigo] = {
         proveedor_nombre: seg.proveedor_nombre ?? "",
         proveedor_id: seg.proveedor_id != null ? String(seg.proveedor_id) : "",
         proveedor_telefono: seg.proveedor_telefono ?? "",
-        precio_producto: seg.precio_producto != null ? String(seg.precio_producto) : "",
+        precio_producto: precioProductoStr,
         comodato: seg.comodato ?? "",
         observaciones_externas: seg.observaciones_externas ?? "",
         agencia_transporte: seg.agencia_transporte ?? "",
         transporte_id: seg.transporte_id != null ? String(seg.transporte_id) : "",
-        precio_flete: seg.precio_flete != null ? String(seg.precio_flete) : "",
+        precio_flete: precioFleteStr,
         observaciones: seg.observaciones ?? "",
         observaciones_transporte: seg.observaciones_transporte ?? "",
         otras_observaciones: seg.otras_observaciones ?? "",
-        margen: seg.margen != null ? String(seg.margen) : "",
+        margen: margenCalc,
+        motivo_margen: motivoCalc,
         margen_orden: seg.margen_orden != null ? String(seg.margen_orden) : "",
         tipo_envio: seg.tipo_envio ?? "",
         empresa_id: seg.empresa_id != null ? String(seg.empresa_id) : String((venta as any).empresa?.id ?? ""),
@@ -3617,33 +3693,16 @@ const actualizarCampo = (
       // mismo valor por ahora es el margen "individual aproximado";
       // el margen PROMEDIO de la orden se calcula aparte en
       // PanelEnvioBloque/FormularioBloqueModal con el total del bloque.
-      if (campo === "precio_producto" || campo === "precio_flete") {
-        const productoVenta = (venta.productos || []).find(
-          (p: any) => String(p.codigo ?? p.id ?? "").trim() === codigo
-        );
-        // Orden con UN SOLO producto -> usa montoVenta de TODA la
-        // orden. Orden con VARIOS productos -> usa el "Monto importe"
-        // que Ventas cargó para ESE producto en CrearOrdenModal
-        // (seg.monto_referencia), nunca el montoVenta compartido.
-        const tieneVariosProductos = (venta.productos || []).length > 1;
-        let montoVentaOrden: number | null;
-        if (tieneVariosProductos) {
-          const seg = seguimientos.find(
-            (s: any) => String(s.producto_codigo).trim() === codigo
-          );
-          montoVentaOrden = seg?.monto_referencia != null && seg.monto_referencia !== ""
-            ? Number(seg.monto_referencia)
-            : null;
-        } else {
-          montoVentaOrden = montoDe(venta);
-        }
-        const margenCalculado = calcularMargen(
+    if (campo === "precio_producto" || campo === "precio_flete") {
+        const { margen, motivo } = calcularMargenConMotivo(
+          codigo,
           actual.precio_producto,
-          productoVenta?.cantidad,
           actual.precio_flete,
-          montoVentaOrden
+          venta,
+          seguimientos
         );
-        actual.margen = margenCalculado != null ? String(margenCalculado) : "";
+        actual.margen = margen;
+        actual.motivo_margen = motivo;
       }
 
       return { ...f, [codigo]: actual };

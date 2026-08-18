@@ -306,7 +306,9 @@ const productosOcr = (otros.productos as Array<Record<string, unknown>> | undefi
     marca: str(p.marca),
     cantidad: Number(p.cantidad) || 1,
     isCompleted: false,
-    montoReferencia: "",
+    // Solo se autorellena cuando hay 2+ productos (nr 1, nr 2...), que es
+    // justo cuando la UI muestra el campo "Monto importe (ref. margen)".
+    montoReferencia: productosOcr.length > 1 ? str(p.importe_pen).replace(/,/g, "") : "",
   }));
 
   const fechaMaxRaw = str(otros.fecha_max_entrega);
@@ -453,6 +455,156 @@ function Field({
 const inputCls =
   "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30 focus:border-[#4F46E5]";
 
+// ============================================================
+// Loader de OCR + IA — versión "premium": anillo giratorio con
+// degradado, icono que cambia de forma con cada etapa, halo pulsante
+// y partículas flotando de fondo. El texto NUNCA menciona qué motor
+// de IA se usa por debajo (Gemini, tokens, etc.) — eso es interno,
+// el usuario solo debe ver magia funcionando.
+//
+// El backend hace OCR + IA en UNA sola llamada, pero la duración real
+// varía. Este loader nunca miente llegando a 100% solo: avanza hasta
+// ~92% y se queda ahí, esperando a que `activo` pase a false (la
+// respuesta real ya llegó).
+// ============================================================
+const ETAPAS_OCR: { texto: string; Icono: React.ElementType }[] = [
+  { texto: "Descargando el documento", Icono: FileScan },
+  { texto: "Leyendo cada detalle del PDF", Icono: Search },
+  { texto: "Detectando los productos", Icono: Sparkles },
+  { texto: "Armando tu formulario", Icono: Package },
+];
+
+// Partículas de fondo con posiciones FIJAS (no Math.random()) — así no
+// hay mismatch de hidratación entre servidor y cliente en Next.js.
+const PARTICULAS_LOADER = [
+  { left: 10, top: 20, size: 4, opacity: 0.6, duracion: 3.2, retraso: 0 },
+  { left: 85, top: 15, size: 3, opacity: 0.5, duracion: 2.6, retraso: 0.4 },
+  { left: 20, top: 75, size: 5, opacity: 0.4, duracion: 3.8, retraso: 0.8 },
+  { left: 75, top: 80, size: 3, opacity: 0.55, duracion: 3.0, retraso: 0.2 },
+  { left: 50, top: 10, size: 2.5, opacity: 0.45, duracion: 2.9, retraso: 1.1 },
+  { left: 90, top: 55, size: 4, opacity: 0.35, duracion: 3.5, retraso: 0.6 },
+  { left: 15, top: 45, size: 3, opacity: 0.5, duracion: 3.1, retraso: 1.4 },
+];
+
+function LoaderOcrProfesional({ activo }: { activo: boolean }) {
+  const [etapaIdx, setEtapaIdx] = useState(0);
+  const [progreso, setProgreso] = useState(0);
+
+  useEffect(() => {
+    if (!activo) {
+      setEtapaIdx(0);
+      setProgreso(0);
+      return;
+    }
+    const intervaloEtapa = setInterval(() => {
+      setEtapaIdx((i) => (i + 1) % ETAPAS_OCR.length);
+    }, 1900);
+    const intervaloProgreso = setInterval(() => {
+      setProgreso((p) => (p < 92 ? p + (92 - p) * 0.06 : p));
+    }, 180);
+    return () => {
+      clearInterval(intervaloEtapa);
+      clearInterval(intervaloProgreso);
+    };
+  }, [activo]);
+
+  const etapaActual = ETAPAS_OCR[etapaIdx];
+  const IconoActual = etapaActual.Icono;
+
+  return (
+    <div className="relative bg-gradient-to-b from-[#0B1120] to-[#151E36] border border-slate-800 rounded-2xl px-6 py-16 flex flex-col items-center gap-7 overflow-hidden">
+      {/* Partículas flotantes de fondo, puro ambiente "mágico" */}
+      <div className="absolute inset-0 pointer-events-none">
+        {PARTICULAS_LOADER.map((p, i) => (
+          <span
+            key={i}
+            className="absolute rounded-full bg-[#818CF8]"
+            style={{
+              left: `${p.left}%`,
+              top: `${p.top}%`,
+              width: p.size,
+              height: p.size,
+              opacity: p.opacity,
+              animation: `hb-flotar ${p.duracion}s ease-in-out ${p.retraso}s infinite`,
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Anillo giratorio con degradado + icono central que cambia por etapa */}
+      <div className="relative w-28 h-28 flex items-center justify-center">
+        <div
+          className="absolute inset-0 rounded-full"
+          style={{
+            background: "conic-gradient(from 0deg, #4F46E5, #818CF8, #C4B5FD, #4F46E5)",
+            animation: "hb-girar 2.2s linear infinite",
+            WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px))",
+            mask: "radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px))",
+          }}
+        />
+        <div className="absolute inset-[6px] rounded-full bg-[#0B1120] flex items-center justify-center">
+          <div key={etapaIdx} className="hb-icono-aparece text-[#A5B4FC]">
+            <IconoActual size={30} strokeWidth={1.75} />
+          </div>
+        </div>
+        {/* Halo pulsante detrás del anillo */}
+        <div
+          className="absolute -inset-2 rounded-full opacity-40"
+          style={{
+            background: "radial-gradient(circle, rgba(129,140,248,0.35) 0%, transparent 70%)",
+            animation: "hb-pulso-halo 1.8s ease-in-out infinite",
+          }}
+        />
+      </div>
+
+      <div className="text-center relative z-10">
+        <p key={etapaIdx} className="text-sm font-semibold text-slate-100 hb-texto-aparece">
+          {etapaActual.texto}
+        </p>
+        <p className="text-[11px] text-slate-500 mt-1.5">
+          {Math.round(progreso)}% completado · esto puede tardar unos segundos
+        </p>
+      </div>
+
+      {/* Barra de progreso fina con el mismo degradado del anillo */}
+      <div className="relative z-10 w-48 h-1 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-[#4F46E5] via-[#818CF8] to-[#C4B5FD]"
+          style={{ width: `${progreso}%`, transition: "width 0.25s ease-out" }}
+        />
+      </div>
+
+      <style jsx>{`
+        @keyframes hb-girar {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes hb-pulso-halo {
+          0%, 100% { transform: scale(0.9); opacity: 0.25; }
+          50% { transform: scale(1.15); opacity: 0.5; }
+        }
+        @keyframes hb-flotar {
+          0%, 100% { transform: translateY(0) scale(1); }
+          50% { transform: translateY(-10px) scale(1.15); }
+        }
+        .hb-icono-aparece {
+          animation: hb-icono-in 0.35s ease-out;
+        }
+        @keyframes hb-icono-in {
+          from { opacity: 0; transform: scale(0.6) rotate(-15deg); }
+          to { opacity: 1; transform: scale(1) rotate(0deg); }
+        }
+        .hb-texto-aparece {
+          animation: hb-texto-in 0.35s ease-out;
+        }
+        @keyframes hb-texto-in {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
 // ============================================================
 // Visor de documentos — pestañas OCE / OCF con iframe de PDF
 // ============================================================
@@ -720,7 +872,10 @@ function EmpresaSelect({
   useEffect(() => {
     listarEmpresas()
       .then(setOpciones)
-      .catch(() => setOpciones([]))
+      .catch((e) => {
+        console.error("Error cargando empresas (revisa si es 401 -> token/sesión vencida):", e);
+        setOpciones([]);
+      })
       .finally(() => setCargando(false));
   }, []);
 
@@ -1003,6 +1158,14 @@ export default function CrearOrdenModal({
 
   const [cargandoOcr, setCargandoOcr] = useState(modo === "ocr");
   const [errorOcr, setErrorOcr] = useState("");
+
+
+
+  const [fuenteProductosOcr, setFuenteProductosOcr] = useState<"gemini" | "regex_fallback" | null>(null);
+  const [tokensGroqOcr, setTokensGroqOcr] = useState<{ prompt: number | null; completion: number | null; total: number | null } | null>(null);
+  const idPeticionOcrRef = useRef(0);
+
+
   const [guardando, setGuardando] = useState(false);
   const [errorGuardar, setErrorGuardar] = useState("");
 
@@ -1285,6 +1448,8 @@ const iniciarOrdenEnBlanco = () => {
     setErrorGuardar("");
     setCamposFaltantes([]);
     setCampoResaltado(null);
+    setFuenteProductosOcr(null);
+    setTokensGroqOcr(null);
 
     // Documentos (OCE/OCF) — se limpian porque ya no corresponden a
     // esta nueva orden manual.
@@ -1380,8 +1545,9 @@ const iniciarOrdenEnBlanco = () => {
 
   // 1) Descarga el PDF + corre el OCR (idéntico a RegistrarOrdenModal.tsx)
   //    y con eso resuelve también el cliente por RUC.
-const correrOcr = useCallback(async () => {
+  const correrOcr = useCallback(async () => {
     if (!publicada) return;
+    const miId = ++idPeticionOcrRef.current;
     setCargandoOcr(true);
     setErrorOcr("");
     try {
@@ -1399,10 +1565,12 @@ const correrOcr = useCallback(async () => {
         throw new Error(body.detail || "No se pudo aplicar el OCR");
       }
       const data = await rOcr.json();
+      if (idPeticionOcrRef.current !== miId) return; // respuesta obsoleta, se ignora
       const datosOcr = data.datos as Record<string, unknown>;
+      setFuenteProductosOcr(data.fuente_productos ?? null);
+      setTokensGroqOcr(data.tokens_groq ?? null);
 
       setForm((f) => mapOcrAFormulario(datosOcr, f));
-
       // Intentar auto-seleccionar el catálogo comparando el texto del
       // OCR (ej. "EXT-CE-2024-18 CEREALES, ACEITE...") contra la lista
       // real de catálogos de la empresa.
@@ -1443,8 +1611,11 @@ const correrOcr = useCallback(async () => {
           }
           // Si ningún catálogo supera el umbral, no se selecciona nada
           // — el usuario elige manualmente en el <select>.
-        } catch {
-          // si falla, el usuario elige el catálogo a mano
+        } catch (e) {
+          // si falla, el usuario elige el catálogo a mano — pero
+          // logueamos para saber SI fue un 401 (token vencido) o un
+          // error real de datos.
+          console.error("Error auto-seleccionando catálogo (revisa si es 401):", e);
         }
       }
 
@@ -1456,7 +1627,7 @@ const correrOcr = useCallback(async () => {
         try {
           const candidatos = await buscarClientes(rucEntidad);
           const match = candidatos.find((c) => c.ruc === rucEntidad) || candidatos[0];
-          if (match) {
+            if (match) {
             set("cliente", match);
             set("departamentoEntrega", match.departamento || "");
             set("provinciaEntrega", match.provincia || "");
@@ -1466,14 +1637,17 @@ const correrOcr = useCallback(async () => {
             // completa con la del cliente si el OCR no trajo ninguna.
             setForm((f) => (f.unidadEjecutora ? f : { ...f, unidadEjecutora: extraerCodigoUnidadEjecutora(match.codigoUnidadEjecutora) }));
           }
-        } catch {
+        } catch (e) {
           // si falla la búsqueda, el usuario elige el cliente a mano abajo
+          // — pero logueamos para saber SI fue un 401 (token vencido).
+          console.error("Error auto-seleccionando cliente por RUC (revisa si es 401):", e);
         }
       }
-    } catch (e) {
+      } catch (e) {
+      if (idPeticionOcrRef.current !== miId) return;
       setErrorOcr(e instanceof Error ? e.message : "Error desconocido procesando el OCR");
     } finally {
-      setCargandoOcr(false);
+      if (idPeticionOcrRef.current === miId) setCargandoOcr(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicada]);
@@ -1633,6 +1807,8 @@ const confirmarActualizarOcf = async () => {
       }
       const data = await rOcr.json();
       const datosOcr = data.datos as Record<string, unknown>;
+      setFuenteProductosOcr(data.fuente_productos ?? null);
+      setTokensGroqOcr(data.tokens_groq ?? null);
 
       setForm((f) => mapOcrAFormulario(datosOcr, f));
 
@@ -2304,12 +2480,26 @@ return (
             )}
           </div>
           {cargandoOcr ? (
-            <div className="bg-white border border-slate-200 rounded-2xl px-6 py-10 flex flex-col items-center gap-3 text-slate-400">
-              <FileScan size={22} className="animate-pulse text-[#4F46E5]" />
-              <p className="text-sm">Leyendo la orden con OCR y pre-llenando el formulario…</p>
-            </div>
+            <LoaderOcrProfesional activo={cargandoOcr} />
           ) : (
             <>
+              {fuenteProductosOcr && (
+                <div
+                  className={`flex items-center gap-2 text-[11px] rounded-lg px-3 py-2 border ${
+                    fuenteProductosOcr === "gemini"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                      : "bg-amber-50 border-amber-200 text-amber-700"
+                  }`}
+                >
+                  {fuenteProductosOcr === "gemini" ? <Sparkles size={12} className="shrink-0" /> : <AlertTriangle size={12} className="shrink-0" />}
+                  <span>
+                    {fuenteProductosOcr === "gemini"
+                      ? "✨ La IA leyó tu orden y completó el formulario automáticamente"
+                      : "El formulario se completó automáticamente — revisa los productos antes de guardar."}
+                  </span>
+                </div>
+              )}
+
               {/* Cliente / Contacto */}
                 {/* Lugar de entrega + Contacto, lado a lado como en el boceto */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">

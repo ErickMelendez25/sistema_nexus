@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
 
+import platform
 import subprocess
 from docx import Document
 from fastapi import UploadFile
@@ -26,6 +27,12 @@ CARPETA_SALIDA.mkdir(parents=True, exist_ok=True)
 # Carpeta donde deben vivir cobranza_1.docx, cobranza_2.docx, cobra1.docx, cobra2.docx
 # en el servidor. Ajusta esta ruta a donde realmente las tengas.
 CARPETA_PLANTILLAS = Path(__file__).resolve().parent / "plantillas"
+
+print("========================================")
+print("CARPETA DE PLANTILLAS:", CARPETA_PLANTILLAS)
+print("cobra1 existe:", (CARPETA_PLANTILLAS / "cobra1.docx").exists())
+print("cobra2 existe:", (CARPETA_PLANTILLAS / "cobra2.docx").exists())
+print("========================================")
 
 MESES_ES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -148,6 +155,45 @@ def ajustar_si_ocam_vacio(doc: Document, ocam_valor: str) -> None:
             continue
 
 
+
+def ajustar_referencia_ocam(doc: Document, ocam_valor: str) -> None:
+    """
+    Para la plantilla CARTA NOTA DÉBITO (cobra1.docx / cobra2.docx), el
+    párrafo de referencia trae:
+        a) Orden de Compra Electrónica {{OCAM}}; Orden Física N° {{OC}}, SIAF N° {{SF}}
+
+    Si OCAM viene vacío, se elimina SOLO el fragmento
+    "Orden de Compra Electrónica {{OCAM}}; " y queda:
+        a) Orden Física N° {{OC}}, SIAF N° {{SF}}
+
+    IMPORTANTE: debe llamarse ANTES de reemplazar_marcadores(), porque
+    busca el marcador {{OCAM}} literal en el texto (si ya se reemplazó
+    por vacío, no hay forma de saber dónde estaba el fragmento).
+    """
+    if ocam_valor.strip():
+        return
+
+    fragmentos_posibles = [
+        "Orden de Compra Electrónica {{OCAM}}; ",
+        "Orden de Compra Electrónica {{OCAM}};",
+        "Orden de Compra Electrónica {{OCAM}} ",
+        "Orden de Compra Electrónica {{OCAM}}",
+    ]
+
+    parrafos = get_all_paragraphs(doc)
+    for section in doc.sections:
+        parrafos.extend(section.header.paragraphs)
+        parrafos.extend(section.footer.paragraphs)
+
+    for p in parrafos:
+        txt = p.text
+        for fragmento in fragmentos_posibles:
+            if fragmento in txt:
+                _set_paragraph_text(p, txt.replace(fragmento, ""))
+                break
+
+
+            
 def quitar_texto_si(doc: Document, texto: str, condicion: bool) -> None:
     """
     Si `condicion` es True, borra `texto` (substring literal) de
@@ -171,8 +217,39 @@ def quitar_texto_si(doc: Document, texto: str, condicion: bool) -> None:
 
 
 
-def crear_pdf_word(ruta_docx: str, ruta_pdf: str) -> None:
-    """Convierte un .docx a .pdf usando LibreOffice en modo headless (Linux)."""
+def _crear_pdf_word_windows(ruta_docx: str, ruta_pdf: str) -> None:
+    """Convierte un .docx a .pdf usando Microsoft Word instalado (win32com)."""
+    import pywintypes
+    import win32com.client
+
+    ruta_docx_abs = str(Path(ruta_docx).resolve())
+    ruta_pdf_abs = str(Path(ruta_pdf).resolve())
+
+    # 17 = wdFormatPDF
+    WD_FORMAT_PDF = 17
+
+    pythoncom = __import__("pythoncom")
+    pythoncom.CoInitialize()
+    word = None
+    doc = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        doc = word.Documents.Open(ruta_docx_abs, ReadOnly=True)
+        doc.SaveAs(ruta_pdf_abs, FileFormat=WD_FORMAT_PDF)
+    except pywintypes.com_error as e:
+        raise RuntimeError(f"Error convirtiendo a PDF con Word: {e}")
+    finally:
+        if doc is not None:
+            doc.Close(False)
+        if word is not None:
+            word.Quit()
+        pythoncom.CoUninitialize()
+
+
+def _crear_pdf_word_linux(ruta_docx: str, ruta_pdf: str) -> None:
+    """Convierte un .docx a .pdf usando LibreOffice en modo headless (Linux/VPS)."""
     carpeta_salida = str(Path(ruta_pdf).parent)
     resultado = subprocess.run(
         [
@@ -193,6 +270,20 @@ def crear_pdf_word(ruta_docx: str, ruta_pdf: str) -> None:
     nombre_generado = Path(carpeta_salida) / (Path(ruta_docx).stem + ".pdf")
     if str(nombre_generado) != ruta_pdf and nombre_generado.exists():
         nombre_generado.rename(ruta_pdf)
+
+
+def crear_pdf_word(ruta_docx: str, ruta_pdf: str) -> None:
+    """
+    Convierte un .docx a .pdf.
+    - En Windows: usa Microsoft Word vía win32com (requiere Word instalado).
+    - En Linux (VPS): usa LibreOffice headless.
+    Detecta el SO automáticamente para que el mismo código sirva tanto
+    en la PC local (Windows) como en el VPS (Linux).
+    """
+    if platform.system() == "Windows":
+        _crear_pdf_word_windows(ruta_docx, ruta_pdf)
+    else:
+        _crear_pdf_word_linux(ruta_docx, ruta_pdf)
 
 def unir_pdfs(lista_pdfs: Iterable[str], salida: str) -> None:
     writer = PdfWriter()

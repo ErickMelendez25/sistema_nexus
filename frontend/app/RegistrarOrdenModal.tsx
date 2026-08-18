@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Loader2,
   AlertTriangle,
@@ -51,6 +51,47 @@ const CAMPOS_OTROS: CampoDef[] = [
   { key: "plazo_entrega", label: "Plazo de Entrega", icon: Truck, span: 2 },
 ];
 
+interface ProductoOcr {
+  descripcion?: string | null;
+  marca?: string | null;
+  codigo?: string | null;
+  cantidad?: string | number | null;
+  precio_unitario?: string | number | null;
+  importe_pen?: string | number | null;
+}
+
+function TablaProductos({ productos }: { productos: ProductoOcr[] }) {
+  if (!productos || productos.length === 0) return null;
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-slate-50 text-slate-500">
+            <th className="text-left font-medium px-3 py-2">Descripción</th>
+            <th className="text-left font-medium px-3 py-2">Marca</th>
+            <th className="text-left font-medium px-3 py-2">Código</th>
+            <th className="text-right font-medium px-3 py-2">Cant.</th>
+            <th className="text-right font-medium px-3 py-2">P. Unit.</th>
+            <th className="text-right font-medium px-3 py-2">Importe (PEN)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {productos.map((p, i) => (
+            <tr key={i} className="border-t border-slate-100">
+              <td className="px-3 py-2 text-slate-800 max-w-[220px]">{p.descripcion || "—"}</td>
+              <td className="px-3 py-2 text-slate-600">{p.marca || "—"}</td>
+              <td className="px-3 py-2 text-slate-600">{p.codigo || "—"}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{p.cantidad ?? "—"}</td>
+              <td className="px-3 py-2 text-right text-slate-600">{p.precio_unitario ?? "—"}</td>
+              <td className="px-3 py-2 text-right font-medium text-slate-800">{p.importe_pen ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function CampoCard({ campo, valor }: { campo: CampoDef; valor: unknown }) {
   const Icon = campo.icon;
   const texto = valor === null || valor === undefined || valor === "" ? "—" : String(valor);
@@ -87,17 +128,65 @@ function SkeletonCampo({ span }: { span?: 1 | 2 }) {
   );
 }
 
+
+
+
+
+function EstadoExtraccion({
+  fuente,
+  tokens,
+}: {
+  fuente: "gemini" | "regex_fallback" | null;
+  tokens: { prompt: number | null; completion: number | null; total: number | null } | null;
+}) {
+  if (!fuente) return null;
+   if (fuente === "gemini") {
+    return (
+      <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] rounded-lg px-3 py-2">
+        <Sparkles size={12} className="shrink-0" />
+          <span>
+          IA (Gemini) aplicada correctamente
+          {tokens?.total != null && <span className="text-emerald-600/80"> · {tokens.total} tokens usados</span>}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-[11px] rounded-lg px-3 py-2">
+      <AlertTriangle size={12} className="shrink-0" />
+      <span>Solo se aplicó el OCR (regex) — la IA no pudo procesar esta orden.</span>
+    </div>
+  );
+}
+
 export default function RegistrarOrdenModal({ p }: RegistrarOrdenModalProps) {
   const [registrarAbierto, setRegistrarAbierto] = useState(false);
   const [cargandoOcr, setCargandoOcr] = useState(false);
   const [datosOcr, setDatosOcr] = useState<Record<string, unknown> | null>(null);
   const [errorOcr, setErrorOcr] = useState("");
 
-  const abrirRegistrarOrden = async () => {
+
+  const [fuenteProductos, setFuenteProductos] = useState<"gemini" | "regex_fallback" | null>(null);
+  const [tokensGroq, setTokensGroq] = useState<{ prompt: number | null; completion: number | null; total: number | null } | null>(null);
+
+
+  // Guard anti-carrera: si por doble-render de dev (StrictMode) o doble
+  // click se disparan 2 peticiones a /ficha/ocr, solo la ÚLTIMA que se
+  // inició puede escribir en el estado — así nunca se ve un resultado
+  // "viejo" (regex) pisar brevemente antes de que llegue el bueno (IA).
+  const idPeticionRef = useRef(0);
+
+const abrirRegistrarOrden = async () => {
+    // Nueva petición -> nuevo id. Cualquier petición anterior en vuelo
+    // queda "obsoleta" y su resultado, cuando llegue, será ignorado.
+    const miId = ++idPeticionRef.current;
+
     setRegistrarAbierto(true);
     setCargandoOcr(true);
     setErrorOcr("");
     setDatosOcr(null);
+    setFuenteProductos(null);
+    setTokensGroq(null);
     try {
       const rPdf = await fetchConToken(`${API_BASE}/publicadas/${p.N_OrdenCompra}/pdf`);
       if (!rPdf.ok) throw new Error("No se pudo descargar el PDF de la orden");
@@ -116,18 +205,34 @@ export default function RegistrarOrdenModal({ p }: RegistrarOrdenModalProps) {
         throw new Error(body.detail || "No se pudo aplicar el OCR");
       }
       const data = await rOcr.json();
+
+      // Si mientras esperábamos esta respuesta se disparó OTRA petición
+      // más nueva (miId ya no es el más reciente), esta respuesta es
+      // vieja/obsoleta -> se descarta sin tocar el estado, para no
+      // pisar el resultado bueno con uno atrasado.
+      if (idPeticionRef.current !== miId) return;
+
       setDatosOcr(data.datos);
+      setFuenteProductos(data.fuente_productos ?? null);
+      setTokensGroq(data.tokens_groq ?? null);
     } catch (e) {
+      if (idPeticionRef.current !== miId) return;
       setErrorOcr(e instanceof Error ? e.message : "Error desconocido");
     } finally {
-      setCargandoOcr(false);
+      if (idPeticionRef.current === miId) setCargandoOcr(false);
     }
   };
 
   const cerrarRegistrarOrden = () => {
+    // Invalida cualquier petición en vuelo — si cierras el modal antes
+    // de que responda, ese resultado (cuando llegue) ya no debe pintar
+    // nada, ni siquiera si vuelves a abrir el modal después.
+    idPeticionRef.current++;
     setRegistrarAbierto(false);
     setDatosOcr(null);
     setErrorOcr("");
+    setFuenteProductos(null);
+    setTokensGroq(null);
   };
 
   const otros = (datosOcr?.otros as Record<string, unknown> | null) || null;
@@ -198,6 +303,8 @@ export default function RegistrarOrdenModal({ p }: RegistrarOrdenModalProps) {
 
               {!cargandoOcr && !errorOcr && datosOcr && (
                 <div className="space-y-6">
+                  <EstadoExtraccion fuente={fuenteProductos} tokens={tokensGroq} />
+
                   {/* Datos principales */}
                   <div>
                     <p
@@ -229,6 +336,19 @@ export default function RegistrarOrdenModal({ p }: RegistrarOrdenModalProps) {
                       </div>
                     </div>
                   )}
+
+                  {/* Tabla de productos (otros.productos, viene de Groq refinando la OCR) */}
+                  {otros && Array.isArray(otros.productos) && otros.productos.length > 0 && (
+                    <div>
+                      <p
+                        style={{ fontFamily: "var(--font-mono)" }}
+                        className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2.5"
+                      >
+                        Productos ({otros.productos.length})
+                      </p>
+                      <TablaProductos productos={otros.productos as ProductoOcr[]} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -236,7 +356,10 @@ export default function RegistrarOrdenModal({ p }: RegistrarOrdenModalProps) {
             {/* Footer */}
             {!cargandoOcr && !errorOcr && datosOcr && (
               <div className="px-5 py-3.5 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between">
-                <p className="text-[11px] text-slate-400">Extraído automáticamente del PDF de la orden.</p>
+                <p className="text-[11px] text-slate-400">
+                  Extraído automáticamente del PDF de la orden.
+                  {tokensGroq?.total != null && ` · ${tokensGroq.total} tokens de Groq`}
+                </p>
                 <button
                   onClick={cerrarRegistrarOrden}
                   className="text-xs font-medium text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-lg hover:bg-white transition-colors"

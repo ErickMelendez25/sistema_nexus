@@ -306,6 +306,12 @@ export default function CartaNotaDebito({
         datos.append("pdfs_extra", pdf);
       }
 
+      console.log("🔥 API BASE:", apiBase);
+      console.log(
+        "🔥 URL CARTA NOTA:",
+        unirUrl(apiBase, "/cobranzas/carta-nota/generar")
+      );
+
       const respuesta = await fetch(
         unirUrl(apiBase, "/cobranzas/carta-nota/generar"),
         {
@@ -314,7 +320,6 @@ export default function CartaNotaDebito({
           credentials: "include",
         },
       );
-
       let cuerpo: unknown;
 
       try {

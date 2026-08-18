@@ -54,6 +54,8 @@ async def generar_carta_nota(
     archivo: str = Form(...),
     pdfs_extra: List[UploadFile] = File(default=[]),
 ):
+
+    print("🔥🔥🔥 CARTA NOTA ENDPOINT EJECUTADO 🔥🔥🔥")
     campos_obligatorios = [
         fecha, fec, num, area, entidad, ciudad, factura,
         fechafac, monto, montopenalidad, oc, sf, archivo,
@@ -89,12 +91,23 @@ async def generar_carta_nota(
         raise HTTPException(500, f"No se pudo abrir la plantilla.\n{e}")
 
     common.ajustar_si_ocam_vacio(doc, ocam)
+    common.ajustar_referencia_ocam(doc, ocam)
     common.eliminar_marcadores_de_bloque(doc)
     common.reemplazar_marcadores(doc, data)
-
+    
     ruta_docx = common.CARPETA_SALIDA / f"{archivo}.docx"
     ruta_pdf_principal = common.CARPETA_SALIDA / f"{archivo}_principal.pdf"
     ruta_pdf_final = common.CARPETA_SALIDA / f"{archivo}.pdf"
+
+
+
+    print("========================================")
+    print("CARPETA SALIDA:", common.CARPETA_SALIDA)
+    print("DOCX GENERADO:", ruta_docx)
+    print("PDF PRINCIPAL:", ruta_pdf_principal)
+    print("PDF FINAL:", ruta_pdf_final)
+    print("========================================")
+
 
     try:
         doc.save(ruta_docx)
@@ -103,7 +116,7 @@ async def generar_carta_nota(
 
     try:
         await run_in_threadpool(common.crear_pdf_word, str(ruta_docx), str(ruta_pdf_principal))
-        os.remove(ruta_docx)
+        # os.remove(ruta_docx)
     except Exception as e:
         raise HTTPException(500, f"Error al convertir a PDF.\n{e}")
 

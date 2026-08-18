@@ -118,7 +118,7 @@ CORS_ORIGINS = [
     "https://gruecolimp.com",
     "http://localhost:3002",
     "http://127.0.0.1:3002",
-    "http://192.168.1.12:3002",
+    "http://192.168.1.41:3002",
     "http://192.168.18.33:3002",
     "http://192.168.18.139:3002",
     "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
@@ -240,6 +240,9 @@ def guardar_notificacion(tipo: str, data: dict, emisor: Optional[str] = None):
     """Persiste la notificación en MySQL. `emisor` es quien generó la
     acción (ej. rellenado_por) — se guarda para poder excluirla del
     propio panel de ese usuario más adelante."""
+    if tipo == "nueva_publicada" and not (data.get("C_OrdenCompra") and data.get("C_Entidad")):
+        return  # basura: no trae OCAM+Entidad, no se guarda
+
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -1782,9 +1785,13 @@ def publicadas_buscar(background_tasks: BackgroundTasks, filtro: dict = {}, uid:
     def tarea():
         items = sesion.buscar_publicadas(filtro)
         nuevos = _guardar_publicadas_en_db(items)
-        for item in nuevos:
-            emitir_alerta({"tipo": "nueva_publicada", "data": item})
-        logger.info(f"publicadas_buscar: {len(items)} encontradas, {len(nuevos)} nuevas")
+        # buscar_publicadas() sigue siendo un STUB sin conectar (ver TODO
+        # arriba del archivo) — los items que devuelve no traen C_OrdenCompra
+        # ni C_Entidad reales, solo un id pelado de la tabla legacy `publicadas`.
+        # La fuente real y correcta de "nueva_publicada" es monitor_publicadas.py
+        # (vía _hacer_callback_nueva_orden), así que aquí NO se emite alerta
+        # hasta que este endpoint esté realmente conectado al scraper.
+        logger.info(f"publicadas_buscar: {len(items)} encontradas, {len(nuevos)} nuevas (sin notificar, endpoint stub)")
 
     background_tasks.add_task(tarea)
     return {"ok": True, "detalle": "Búsqueda de publicadas iniciada en background"}

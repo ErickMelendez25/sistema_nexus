@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, ReactNode } from "react";
+import { useState, useEffect, ReactNode } from "react";
 import {
   ShieldCheck, ChevronsLeft, ChevronsRight, Menu, X, LogOut,
   Bell, LogIn, Loader2, CheckCircle2, Wifi, WifiOff, FileScan,
@@ -92,11 +92,15 @@ interface SidebarProps {
 
   wsConectado: boolean;
   onCrearOrden: () => void;
-  /** Oculta el botón hamburguesa flotante en mobile — se usa cuando
+/** Oculta el botón hamburguesa flotante en mobile — se usa cuando
    * hay una conversación de chat abierta y su propio botón "atrás"
    * ya cumple esa función, para no tener dos botones compitiendo por
    * el mismo espacio. */
   ocultarHamburguesaMovil?: boolean;
+  /** Notifica al padre cada vez que cambia el estado colapsado/expandido
+   * del sidebar (72px vs 256px) — page.tsx lo necesita para calcular la
+   * posición del panel de notificaciones, que vive fuera de este archivo. */
+  onColapsadoChange?: (colapsado: boolean) => void;
 }
 export default function Sidebar({
   tabs,
@@ -125,9 +129,17 @@ export default function Sidebar({
   wsConectado,
   onCrearOrden,
   ocultarHamburguesaMovil = false,
+  onColapsadoChange,
 }: SidebarProps) {
   const [colapsado, setColapsado] = useState(false);
   const [abiertoMovil, setAbiertoMovil] = useState(false);
+
+  // page.tsx no tiene forma de saber si el sidebar está colapsado (ese
+  // estado vive solo acá) — este efecto le avisa cada vez que cambia,
+  // para que el panel de notificaciones pueda pegarse al borde correcto.
+  useEffect(() => {
+    onColapsadoChange?.(colapsado);
+  }, [colapsado, onColapsadoChange]);
 
 
   const [modalCerrarSesion, setModalCerrarSesion] = useState(false);

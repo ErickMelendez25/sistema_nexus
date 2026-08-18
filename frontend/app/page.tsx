@@ -1,4 +1,4 @@
-  "use client";
+﻿  "use client";
 
   import { useState, useEffect, useRef, useCallback, useMemo } from "react";
   import { useRouter } from "next/navigation";
@@ -279,6 +279,17 @@ interface ResumenChat {
           to { transform: translateY(0); opacity: 1; }
         }
         .hb-slide-in { animation: hb-slide-in 0.3s ease-out; }
+
+        /* Encoge el panel hacia la campanita (esquina superior, origen
+           definido por origin-top-right / md:origin-top-left en el JSX)
+           en vez de simplemente desaparecer — sensación de "aspirado"
+           hacia el módulo de notificaciones. */
+        @keyframes hb-funnel-out {
+          0% { transform: scale(1); opacity: 1; }
+          60% { transform: scale(0.55) translateY(-6%); opacity: 0.5; }
+          100% { transform: scale(0.05) translateY(-20%); opacity: 0; }
+        }
+        .hb-funnel-out { animation: hb-funnel-out 0.26s cubic-bezier(0.4, 0, 1, 1) forwards; }
 
         :focus-visible {
           outline: 2px solid #4f46e5;
@@ -855,6 +866,17 @@ interface ResumenChat {
     }, []);
 
     const [panelNotisAbierto, setPanelNotisAbierto] = useState(false);
+    // true SOLO durante la animación de cierre — el panel sigue montado
+    // (para que se vea encogerse) y recién se desmonta cuando termina.
+    const [panelCerrando, setPanelCerrando] = useState(false);
+
+    // Espejo del estado "colapsado" de Sidebar.tsx (72px vs 256px) — vive
+    // acá también para poder pegar el panel de notificaciones al borde
+    // correcto del sidebar, sea cual sea su ancho actual.
+    const [sidebarColapsado, setSidebarColapsado] = useState(false);
+    const [tabNotis, setTabNotis] = useState<"todas" | "chat" | "publicadas">("todas");
+    const [filtroFechaDesde, setFiltroFechaDesde] = useState("");
+    const [filtroFechaHasta, setFiltroFechaHasta] = useState("");
     const [publicadas, setPublicadas] = useState<Publicada[]>([]);
     const [cargandoLogin, setCargandoLogin] = useState<"perucompras" | "erp" | null>(null);
 
@@ -981,9 +1003,9 @@ interface ResumenChat {
     // el código del producto que se llenó para que se abra expandido.
   const abrirDesdeNotificacion = useCallback(
       (n: Alerta) => {
-        setPanelNotisAbierto(false);
+        cerrarPanelNotis();
 
-        // Marca SOLO esta notificación como leída (ni las otras 4, ni
+        // Marca SOLO esta notificación como leída
         // ninguna más) — tanto si vino del panel como si vino de la
         // flotante, ambas usan esta misma función.
         setNotificaciones((prev) =>
@@ -1061,6 +1083,19 @@ interface ResumenChat {
       [ventasErp]
     );
 
+    // Mismo patrón que abrirDesdeNotificacion, pero sin filtrar por id:
+    // marca TODAS las no leídas de una vez, en el mismo endpoint.
+    const marcarTodasLeidas = useCallback(() => {
+      const idsNoLeidas = notificaciones.filter((n) => !n.leida).map((n) => n.id);
+      if (idsNoLeidas.length === 0) return;
+      setNotificaciones((prev) => prev.map((x) => ({ ...x, leida: true })));
+      fetchConToken(`${API_BASE}/notificaciones/marcar-leidas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsNoLeidas }),
+      }).catch(() => {});
+    }, [notificaciones]);
+
     const noLeidas = notificaciones.filter((n) => !n.leida).length;
 
     // Suma de no leídos de TODAS las conversaciones — se usa para el
@@ -1075,6 +1110,34 @@ interface ResumenChat {
     const abrirPanelNotis = () => {
       setPanelNotisAbierto((v) => !v);
     };
+
+    // Cierra el panel con la animación de "embudo" hacia la campanita:
+    const cerrarPanelNotis = useCallback(() => {
+      setPanelCerrando(true);
+
+      setTimeout(() => {
+        setPanelNotisAbierto(false);
+        setPanelCerrando(false);
+      }, 260);
+    }, []);
+
+    // Cerrar panel de notificaciones con la tecla Escape
+    useEffect(() => {
+      const manejarEscape = (e: KeyboardEvent) => {
+        if (e.key === "Escape" && panelNotisAbierto) {
+          cerrarPanelNotis();
+        }
+      };
+
+      document.addEventListener("keydown", manejarEscape);
+
+      return () => {
+        document.removeEventListener("keydown", manejarEscape);
+      };
+    }, [panelNotisAbierto, cerrarPanelNotis]);
+
+
+    
     const cargarEstadoSesion = useCallback(async () => {
       try {
         const r = await fetchConToken(`${API_BASE}/sesion/estado`);
@@ -1701,18 +1764,121 @@ const tabs = esAdmin
             noLeidas={noLeidas}
             onTogglePanelNotis={abrirPanelNotis}
             panelNotificaciones={
-              panelNotisAbierto && (
-                <div className="absolute left-full top-0 ml-2 w-[420px] max-w-[85vw] bg-white border border-slate-200 rounded-xl shadow-lg shadow-slate-900/10 z-50 hb-slide-in max-h-[28rem] overflow-y-auto text-slate-800">
-                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
-                    <span className="text-sm font-semibold text-slate-800">Notificaciones</span>
-                    <button onClick={() => setPanelNotisAbierto(false)} className="text-slate-400 hover:text-slate-700">
-                      <X size={14} />
-                    </button>
-                  </div>
-                  {notificaciones.length === 0 ? (
-                    <p className="text-xs text-slate-400 px-4 py-6 text-center">Sin notificaciones todavía</p>
-                  ) : (
-                    notificaciones.map((n) => (
+              (panelNotisAbierto || panelCerrando) && (
+                <>
+                  <div
+                    className="fixed inset-0 bg-slate-900/30 z-40"
+                    onClick={cerrarPanelNotis}
+                  />
+                  <div
+                    className={`fixed inset-y-0 right-0 md:right-auto md:left-[var(--panel-left)] h-screen w-[420px] max-w-[90vw] bg-white border-l md:border-l-0 md:border-r border-slate-200 shadow-2xl shadow-slate-900/20 z-50 flex flex-col text-slate-800 transition-[left] duration-200 origin-top-right md:origin-top-left ${
+                      panelCerrando ? "hb-funnel-out" : "hb-slide-in"
+                    }`}
+                    style={{ ["--panel-left" as any]: sidebarColapsado ? "72px" : "256px" }}
+                  >
+                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between shrink-0">
+                      <span className="text-sm font-semibold text-slate-800">Notificaciones</span>
+                      <div className="flex items-center gap-3">
+                        {/*
+                          {noLeidas > 0 && (
+                            <button
+                              onClick={marcarTodasLeidas}
+                              className="text-[11px] font-medium text-[#4F46E5] hover:underline"
+                            >
+                              Marcar todas leídas
+                            </button>
+                          )}
+                        */}
+                          <button onClick={cerrarPanelNotis} className="text-slate-400 hover:text-slate-700">
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex border-b border-slate-100 shrink-0">
+                      {[
+                        { id: "todas" as const, label: "Todas" },
+                        { id: "chat" as const, label: "Chat" },
+                        { id: "publicadas" as const, label: "Publicadas" },
+                      ].map((t) => (
+                        <button
+                          key={t.id}
+                          onClick={() => setTabNotis(t.id)}
+                          className={`flex-1 text-xs font-semibold py-2.5 border-b-2 transition-colors ${
+                            tabNotis === t.id
+                              ? "border-[#4F46E5] text-[#4F46E5]"
+                              : "border-transparent text-slate-400 hover:text-slate-600"
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Filtro por fecha — inputs nativos type="date" abren
+                        el calendario propio del navegador/SO, sin librerías
+                        extra. "Desde" vacío = sin piso, "Hasta" vacío = sin
+                        techo; con solo "Desde" filtra un único día. */}
+                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-slate-100 shrink-0">
+                      <input
+                        type="date"
+                        value={filtroFechaDesde}
+                        onChange={(e) => setFiltroFechaDesde(e.target.value)}
+                        max={filtroFechaHasta || undefined}
+                        style={{ fontFamily: "var(--font-mono)" }}
+                        className="flex-1 min-w-0 text-[11px] border border-slate-200 rounded-md px-1.5 py-1 text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                      <span className="text-[10px] text-slate-300 shrink-0">→</span>
+                      <input
+                        type="date"
+                        value={filtroFechaHasta}
+                        onChange={(e) => setFiltroFechaHasta(e.target.value)}
+                        min={filtroFechaDesde || undefined}
+                        style={{ fontFamily: "var(--font-mono)" }}
+                        className="flex-1 min-w-0 text-[11px] border border-slate-200 rounded-md px-1.5 py-1 text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                      {(filtroFechaDesde || filtroFechaHasta) && (
+                        <button
+                          onClick={() => { setFiltroFechaDesde(""); setFiltroFechaHasta(""); }}
+                          title="Quitar filtro de fecha"
+                          className="shrink-0 text-slate-400 hover:text-slate-700"
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto">
+                  {(() => {
+                    const filtradas = notificaciones.filter((n) => {
+                      const okTab =
+                        tabNotis === "chat"
+                          ? n.tipo === "chat_mensaje"
+                          : tabNotis === "publicadas"
+                          ? n.tipo === "nueva_publicada"
+                          : true;
+                      if (!okTab) return false;
+
+                      if (!filtroFechaDesde && !filtroFechaHasta) return true;
+                      if (n.creado_en == null) return false;
+                      // n.creado_en viene como ISO ("2026-08-17T14:32:00...")
+                      // — los primeros 10 caracteres ya son "yyyy-mm-dd",
+                      // mismo formato que entrega <input type="date">, así
+                      // que se puede comparar directo como string.
+                      const fechaNoti = String(n.creado_en).slice(0, 10);
+                      if (filtroFechaDesde && fechaNoti < filtroFechaDesde) return false;
+                      if (filtroFechaHasta && fechaNoti > filtroFechaHasta) return false;
+                      return true;
+                    });
+                    if (filtradas.length === 0) {
+                      return (
+                        <p className="text-xs text-slate-400 px-4 py-6 text-center">
+                          {filtroFechaDesde || filtroFechaHasta
+                            ? "Sin notificaciones en ese rango de fechas"
+                            : "Sin notificaciones aquí"}
+                        </p>
+                      );
+                    }
+                    return filtradas.map((n) => (
                       <div
                         key={n.id}
                         onClick={() => abrirDesdeNotificacion(n)}
@@ -1728,7 +1894,7 @@ const tabs = esAdmin
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <p className={`text-xs truncate ${n.leida ? "font-medium text-slate-500" : "font-semibold text-slate-800"}`}>
-                              {n.tipo === "precio"
+                              {n.tipo === "precio_completado"
                                 ? "Precio completado"
                                 : n.tipo === "op_rellenada_bloque"
                                 ? `${String(n.rellenado_por || "Alguien")} envió ${n.cantidad ?? ""} productos en bloque`
@@ -1742,11 +1908,21 @@ const tabs = esAdmin
                                 ? `${String(n.actualizado_por || "Seguimiento")} actualizó datos en el ERP`
                                 : n.tipo === "mef_completado"
                                 ? `${String(n.completado_por || "Seguimiento")} completó los resultados del MEF en el ERP`
+                                : n.tipo === "perucompras_sesion_perdida"
+                                ? `Sesión de Perú Compras perdida (${String(n.usuario || "")})`
+                                : n.tipo === "perucompras_sesion_recuperada"
+                                ? `Sesión de Perú Compras recuperada (${String(n.usuario || "")})`
                                 : n.tipo === "perucompras_sesion_fallida"
                                 ? `No se pudo reconectar Perú Compras (${String(n.usuario || "")})`
                                 : n.tipo === "nueva_publicada"
                                 ? `Nueva publicada · ${String(n.C_OrdenCompra || "")}`
-                                : "Nueva publicada"}
+                                : n.tipo === "ventas_erp_actualizadas"
+                                ? "Ventas del ERP actualizadas"
+                                : n.tipo === "perucompras_logout"
+                                ? "Sesión de Perú Compras cerrada"
+                                : n.tipo === "producto_imagenes_actualizadas"
+                                ? "Imágenes de producto actualizadas"
+                                : "Notificación"}
                             </p>
                             {n.creado_en != null && (
                               <span
@@ -1760,23 +1936,27 @@ const tabs = esAdmin
                             )}
                           </div>
                           <p style={{ fontFamily: "var(--font-mono)" }} className={`text-[11px] truncate ${n.leida ? "text-slate-400" : "text-slate-500"}`}>
-                            {n.tipo === "op_rellenada" || n.tipo === "op_confirmada" || n.tipo === "op_actualizada_erp"
+                              {n.tipo === "op_rellenada" || n.tipo === "op_confirmada" || n.tipo === "op_actualizada_erp"
                               ? `Producto ${String(n.producto_codigo || n.numero_ocam || n.orden_compra_id || "")}`
                               : n.tipo === "mef_completado"
                               ? `Expediente ${String(n.expediente || "—")} / U.E. ${String(n.unidad_ejecutora || "—")}`
+                              : n.tipo === "perucompras_sesion_perdida" || n.tipo === "perucompras_sesion_recuperada" || n.tipo === "perucompras_sesion_fallida"
+                              ? String(n.mensaje || "")
                               : String(n.C_Entidad || n.producto || n.C_OrdenCompra || n.id)}
                           </p>
                           {(n.tipo === "op_rellenada" || n.tipo === "op_confirmada" || n.tipo === "op_actualizada_erp") && n.producto_descripcion != null && (
                             <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">{String(n.producto_descripcion)}</p>
                           )}
-                          {n.tipo === "op_rellenada" && Array.isArray(n.campos_faltantes) && n.campos_faltantes.length > 0 && (
+                            {n.tipo === "op_rellenada" && Array.isArray(n.campos_faltantes) && n.campos_faltantes.length > 0 && (
                             <p className="text-[10px] text-amber-600 mt-0.5">Faltan: {(n.campos_faltantes as string[]).join(", ")}</p>
                           )}
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
+                    ));
+                  })()}
+                    </div>
+                  </div>
+                </>
               )
             }
             puedeUsarPeruCompras={puedeUsarPeruCompras}
@@ -1793,6 +1973,7 @@ const tabs = esAdmin
             onCrearOrden={abrirNuevaOrdenEnBlanco}
             noLeidasChat={noLeidasChat}
             ocultarHamburguesaMovil={tab === "chat" && chatConversacionAbierta}
+            onColapsadoChange={setSidebarColapsado}
           />
 
           <div className="flex-1 min-w-0">
@@ -2972,10 +3153,9 @@ const tabs = esAdmin
           const rPdf = await fetchConToken(`${API_BASE}/publicadas/${p.N_OrdenCompra}/pdf`);
           if (!rPdf.ok) throw new Error("No se pudo descargar el PDF");
           const blobPdf = await rPdf.blob();
-
           const fd = new FormData();
           fd.append("archivo", blobPdf, `${p.C_OrdenCompra}.pdf`);
-
+          fd.append("solo_ubigeo", "true");
           const rOcr = await fetchConToken(`${API_BASE}/ficha/ocr`, { method: "POST", body: fd });
           if (!rOcr.ok) throw new Error("OCR falló");
           const data = await rOcr.json();

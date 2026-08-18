@@ -17,6 +17,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 
 from db import get_conn, guardar_json
+from gemini_productos import extraer_productos_gemini
 
 logger = logging.getLogger("helbot.ficha_ocr")
 logging.basicConfig(level=logging.INFO)
@@ -152,10 +153,27 @@ def _extraer_productos(texto: str) -> list[dict]:
         re.DOTALL,
     )
 
+    # Fallback: algunas OCAM (ej. el formato "FISICA" que trae Página 1
+    # de 2 / Página 2 de 2) NO traen la etiqueta "MARCA:" en el texto
+    # -> la columna Marca viene pegada directo antes del código, sin
+    # ningún label. En ese caso anclamos por el CÓDIGO (patrón
+    # NNN.NNNNNN típico de Perú Compras) en vez de por "MARCA:".
+    patron_datos_sin_marca = re.compile(
+        r"(?P<marca>[A-ZÁÉÍÓÚÑ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ]{2,}){0,3})\s+"
+        r"(?P<codigo>\d{2,4}\.\d{4,8})\s+"
+        r"(?P<cantidad>\d{1,4})\s+"
+        r"(?P<numeros>(?:[\d,]+\.\d{2}\s*){1,4})",
+        re.DOTALL,
+    )
+
     for m in filas:
         contenido = m.group(2)
 
         m_datos = patron_datos.search(contenido)
+        usa_marca_literal = m_datos is not None
+        if not m_datos:
+            m_datos = patron_datos_sin_marca.search(contenido)
+
         if not m_datos:
             logger.warning(
                 f"_extraer_productos: no se pudo separar marca/código/cantidad en: {contenido[:120]!r}"
@@ -174,6 +192,23 @@ def _extraer_productos(texto: str) -> list[dict]:
         # original) — así preferimos "P PROSERLIM" sobre solo "P" si
         # esa versión más completa aparece en alguna mención.
         candidatos_marca = [m_datos.group("marca").strip()]
+
+        # Cuando NO hay "MARCA:" literal, el texto suele repetir el
+        # CÓDIGO una segunda vez más adelante en la fila (artefacto del
+        # wrap de columnas de pdfplumber), y justo antes de esa segunda
+        # aparición suele venir la marca completa (ej. "ROLLOS
+        # INSTITUCIONAL SUPER 004.022005"). La usamos como candidato
+        # extra si es más larga que la que ya tenemos.
+        if not usa_marca_literal:
+            codigo_txt = m_datos.group("codigo")
+            for m_otra in re.finditer(re.escape(codigo_txt), contenido):
+                if m_otra.start() == m_datos.start("codigo"):
+                    continue
+                palabras_antes = contenido[:m_otra.start()].split()[-3:]
+                palabras_antes = [p for p in palabras_antes if p.isalpha()]
+                if palabras_antes:
+                    candidatos_marca.append(" ".join(palabras_antes))
+
         for m_otra in re.finditer(r"MARCA:\s*", contenido):
             palabras = []
             for tok in contenido[m_otra.end():].split():
@@ -202,6 +237,46 @@ def _extraer_productos(texto: str) -> list[dict]:
         })
 
     return productos
+
+
+def _recortar_texto_para_groq(texto: str, ventana: int = 3000) -> str:
+    """
+    Devuelve SOLO los fragmentos del texto que contienen tablas de
+    productos, en vez del PDF completo.
+
+    Las OCAM traen secciones enormes (DATOS DE LA ENTIDAD, DATOS DEL
+    PROVEEDOR, DATOS DEL LUGAR DE ENTREGA, direcciones, RUCs, etc.) que
+    no sirven para nada en la extracción de productos, pero Groq las
+    cobra igual como tokens de entrada. Cada tabla de productos siempre
+    termina en "IMPORTE TOTAL (PEN)", así que por cada aparición de ese
+    marcador tomamos los `ventana` caracteres previos (de sobra para
+    cubrir toda la tabla, encabezado incluido) y descartamos el resto.
+
+    Si el documento repite la tabla en 2 páginas, se toman los 2
+    bloques (uno por cada "IMPORTE TOTAL (PEN)" que aparezca).
+    """
+    marcador = re.compile(r"IMPORTE\s*TOTAL\s*\(?\s*PEN\s*\)?", re.IGNORECASE)
+    spans = []
+    for m in marcador.finditer(texto):
+        inicio = max(0, m.start() - ventana)
+        fin = m.end()
+        spans.append([inicio, fin])
+
+    if not spans:
+        # No se encontró el marcador -> no hay forma segura de recortar,
+        # se manda el texto completo para no perder productos.
+        return texto
+
+    # Fusiona bloques que se solapan (ej. 2 tablas muy seguidas).
+    spans.sort()
+    fusionados = [spans[0]]
+    for inicio, fin in spans[1:]:
+        if inicio <= fusionados[-1][1]:
+            fusionados[-1][1] = max(fusionados[-1][1], fin)
+        else:
+            fusionados.append([inicio, fin])
+
+    return "\n\n".join(texto[i:f] for i, f in fusionados)
 
 def parsear_campos_ocam(texto: str) -> DatosFicha:
     def buscar(patron, fuente=texto, flags=re.IGNORECASE):
@@ -251,9 +326,19 @@ def parsear_campos_ocam(texto: str) -> DatosFicha:
     expediente = buscar(r"Expediente\s*SIAF\s*:\s*(\d+)", bloque_contratacion) or buscar(r"Expediente\s*SIAF\s*:\s*(\d+)")
 
     # Plazo de entrega: "Del 30/07/2026 al 04/08/2026" -> nos quedamos con la 2da fecha
+    # Plazo de entrega: "Del 30/07/2026 al 04/08/2026" -> nos quedamos con la 2da fecha.
+    # OJO: buscamos en el TEXTO COMPLETO, no en bloque_contratacion. La
+    # etiqueta "DATOS DE LA CONTRATACIÓN" puede aparecer 2 veces en el
+    # documento (una fragmentada por el layout en columnas de la página
+    # 1, y la sección real y completa en la página 2) — bloque_contratacion
+    # toma la PRIMERA aparición y se corta antes de llegar a la sección
+    # de la página 2 donde realmente vive "Plazo de entrega", dejando
+    # este campo vacío. Como la etiqueta "Plazo de entrega" es lo
+    # bastante única en todo el documento, es más seguro buscarla
+    # directo en el texto completo.
     m_plazo = re.search(
         r"Plazo de entrega\s*:\s*Del\s*(\d{2}/\d{2}/\d{4})\s*al\s*(\d{2}/\d{2}/\d{4})",
-        bloque_contratacion or texto,
+        texto,
     )
     fecha_max_entrega = m_plazo.group(2) if m_plazo else None
     plazo_entrega_raw = f"Del {m_plazo.group(1)} al {m_plazo.group(2)}" if m_plazo else None
@@ -267,6 +352,24 @@ def parsear_campos_ocam(texto: str) -> DatosFicha:
     distrito_entrega = buscar(r"Distrito\s*:\s*([^\n]+)", bloque_lugar)
     provincia_entrega = buscar(r"Provincia\s*:\s*([^\n]+)", bloque_lugar)
     departamento_entrega = buscar(r"Departamento\s*:\s*([^\n]+)", bloque_lugar)
+
+    # Fallback: algunas OCAM (ej. Puno) NO traen "Distrito:"/"Provincia:"/
+    # "Departamento:" como etiquetas separadas -> en su lugar traen un
+    # único campo "Ubigeo : DISTRITO / PROVINCIA / DEPARTAMENTO", ej.
+    # "PUNO / PUNO / PUNO" o "JULI /CHUCUITO/ PUNO". Si algún campo
+    # quedó vacío arriba, lo rellenamos partiendo ese Ubigeo por "/".
+    if not (distrito_entrega and provincia_entrega and departamento_entrega):
+        ubigeo_entrega = buscar(r"Ubigeo\s*:\s*([^\n]+)", bloque_lugar)
+        if ubigeo_entrega:
+            partes_ubigeo = [p.strip() for p in ubigeo_entrega.split("/")]
+            if len(partes_ubigeo) == 3:
+                distrito_entrega = distrito_entrega or partes_ubigeo[0]
+                provincia_entrega = provincia_entrega or partes_ubigeo[1]
+                departamento_entrega = departamento_entrega or partes_ubigeo[2]
+            else:
+                logger.warning(
+                    f"Ubigeo de entrega con formato inesperado (no son 3 partes separadas por '/'): {ubigeo_entrega!r}"
+                )
 
     # Entidad
     ruc_entidad = buscar(r"RUC\s*:\s*(\d{11})", bloque_entidad)
@@ -348,7 +451,11 @@ router = APIRouter(prefix="/ficha", tags=["Ficha OCR"])
 
 
 @router.post("/ocr")
-async def ocr_ficha(archivo: UploadFile = File(...), publicada_id: Optional[str] = Form(None)):
+async def ocr_ficha(
+    archivo: UploadFile = File(...),
+    publicada_id: Optional[str] = Form(None),
+    solo_ubigeo: bool = Form(False),
+):
     contenido = await archivo.read()
     nombre = (archivo.filename or "").lower()
     es_pdf = nombre.endswith(".pdf") or archivo.content_type == "application/pdf"
@@ -360,10 +467,91 @@ async def ocr_ficha(archivo: UploadFile = File(...), publicada_id: Optional[str]
 
     datos = parsear_campos_ocam(texto)
 
-    print(datos.model_dump())
+    # solo_ubigeo=true -> el caller solo necesita departamento/provincia/
+    # distrito de entrega (ya viene del regex en parsear_campos_ocam), no
+    # necesita productos -> no vale la pena gastar tokens de Groq aquí.
+    if solo_ubigeo:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO fichas_ocr (publicada_id, datos_extraidos) VALUES (%s,%s)",
+                    (publicada_id, guardar_json(datos.dict())),
+                )
+        finally:
+            conn.close()
+        return {"ok": True, "datos": datos, "texto_crudo": texto}
 
-    print(datos.dict())
+    # Recorta el texto ANTES de mandarlo a Groq: solo el bloque de la(s)
+    # tabla(s) de productos, no la ficha completa (entidad/proveedor/
+    # lugar de entrega no sirven para esto y solo suman tokens de
+    # entrada, subiendo el riesgo de 429).
+    texto_para_groq = _recortar_texto_para_groq(texto)
 
+    try:
+        resultado_ia = await extraer_productos_gemini(texto_para_groq)
+    except Exception as e:
+        logger.warning(f"Gemini no pudo refinar productos, se usa el resultado del regex: {e}")
+        resultado_ia = {"productos": [], "fuente": "regex_fallback", "tokens": None, "error": str(e)}
+
+    productos_groq = resultado_ia["productos"]
+    fuente_productos = resultado_ia["fuente"]        # "gemini" | "regex_fallback"
+    tokens_groq = resultado_ia["tokens"]              # {"prompt","completion","total"} | None
+
+    if productos_groq:
+        # Antes de pisar la lista con la de Gemini: matcheamos cada
+        # producto de Gemini con el que ya había sacado el regex
+        # (_extraer_productos), usando un código NORMALIZADO (sin
+        # espacios) y, si eso falla, el código BASE (la parte antes del
+        # guión) — porque Gemini a veces trunca el sufijo "- N" y ya no
+        # coincide exacto con lo que sacó el regex.
+        def _normalizar_codigo(c: str) -> str:
+            return re.sub(r"\s+", "", c or "")
+
+        productos_regex_por_codigo = {}
+        productos_regex_por_base = {}
+        for p_r in datos.otros.get("productos", []):
+            cod_r = (p_r.get("codigo") or "").strip()
+            if not cod_r:
+                continue
+            norm_r = _normalizar_codigo(cod_r)
+            productos_regex_por_codigo[norm_r] = p_r
+            productos_regex_por_base[norm_r.split("-")[0]] = p_r
+
+        for p in productos_groq:
+            codigo_groq = (p.get("codigo") or "").strip()
+            norm_groq = _normalizar_codigo(codigo_groq)
+            p_regex = (
+                productos_regex_por_codigo.get(norm_groq)
+                or productos_regex_por_base.get(norm_groq)
+                or productos_regex_por_base.get(norm_groq.split("-")[0])
+            )
+
+            if not p.get("marca") and p_regex and p_regex.get("marca"):
+                logger.info(f"Rellenando marca faltante desde el regex para código {codigo_groq!r}: {p_regex['marca']!r}")
+                p["marca"] = p_regex["marca"]
+
+            if not p.get("descripcion") and p_regex and p_regex.get("descripcion"):
+                p["descripcion"] = p_regex["descripcion"]
+
+            # El código es un dato estructurado -> el regex es más
+            # confiable que la IA para esto. Si el regex encontró un
+            # código MÁS COMPLETO (con sufijo "- N" que Gemini truncó),
+            # usamos el del regex en vez del de Gemini.
+            if p_regex and p_regex.get("codigo"):
+                norm_regex_codigo = _normalizar_codigo(p_regex["codigo"])
+                if len(norm_regex_codigo) > len(norm_groq):
+                    logger.info(f"Código truncado por Gemini ({codigo_groq!r}), usando el completo del regex: {p_regex['codigo']!r}")
+                    p["codigo"] = p_regex["codigo"]
+
+        datos.otros["productos"] = productos_groq
+        primero = productos_groq[0]
+        datos.producto = primero.get("descripcion") or datos.producto
+        datos.cantidad = primero.get("cantidad") or datos.cantidad
+        datos.otros["marca_producto"] = primero.get("marca") or datos.otros.get("marca_producto")
+        datos.otros["codigo_producto"] = primero.get("codigo") or datos.otros.get("codigo_producto")
+        datos.otros["precio_unitario"] = primero.get("precio_unitario") or datos.otros.get("precio_unitario")
+        datos.otros["importe_pen_producto"] = primero.get("importe_pen") or datos.otros.get("importe_pen_producto")
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -374,4 +562,10 @@ async def ocr_ficha(archivo: UploadFile = File(...), publicada_id: Optional[str]
     finally:
         conn.close()
 
-    return {"ok": True, "datos": datos, "texto_crudo": texto}
+    return {
+        "ok": True,
+        "datos": datos,
+        "texto_crudo": texto,
+        "fuente_productos": fuente_productos,
+        "tokens_groq": tokens_groq,
+    }
