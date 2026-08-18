@@ -193,7 +193,7 @@ def ajustar_referencia_ocam(doc: Document, ocam_valor: str) -> None:
                 break
 
 
-            
+
 def quitar_texto_si(doc: Document, texto: str, condicion: bool) -> None:
     """
     Si `condicion` es True, borra `texto` (substring literal) de
@@ -287,10 +287,15 @@ def crear_pdf_word(ruta_docx: str, ruta_pdf: str) -> None:
 
 def unir_pdfs(lista_pdfs: Iterable[str], salida: str) -> None:
     writer = PdfWriter()
-    for pdf in lista_pdfs:
-        lector = PdfReader(pdf)
+
+    for ruta in lista_pdfs:
+        print("UNIENDO PDF:", ruta)
+
+        lector = PdfReader(ruta)
+
         for pagina in lector.pages:
             writer.add_page(pagina)
+
     with open(salida, "wb") as f:
         writer.write(f)
 
