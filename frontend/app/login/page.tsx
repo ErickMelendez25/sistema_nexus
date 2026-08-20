@@ -30,8 +30,9 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [mostrarPassword, setMostrarPassword] = useState(false);
-  const [cargando, setCargando] = useState(false);
-  const [error, setError] = useState("");
+const [cargando, setCargando] = useState(false);
+const [error, setError] = useState("");
+const [transicionExitosa, setTransicionExitosa] = useState(false);
 
 const iniciarSesion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +56,10 @@ const iniciarSesion = async (e: React.FormEvent) => {
       // en cada fetch (header Authorization) y para pintar catálogos permitidos.
       localStorage.setItem("helbot_token", data.token);
       localStorage.setItem("helbot_usuario", JSON.stringify(data.usuario));
-      router.push("/");
+      setTransicionExitosa(true);
+      setTimeout(() => {
+        router.push("/");
+      }, 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error desconocido");
     } finally {
@@ -69,6 +73,12 @@ const iniciarSesion = async (e: React.FormEvent) => {
         @keyframes hb-kenburns {
           0% { transform: scale(1.02); }
           100% { transform: scale(1.07); }
+        }
+
+        @keyframes hb-flash {
+          0% { opacity: 0; }
+          40% { opacity: 1; }
+          100% { opacity: 0; }
         }
         @keyframes hb-fade-up {
           from { opacity: 0; transform: translateY(10px); }
@@ -128,8 +138,16 @@ const iniciarSesion = async (e: React.FormEvent) => {
         }
       `}</style>
 
+      {transicionExitosa && (
+        <div className="absolute inset-0 z-30 pointer-events-none bg-gradient-to-r from-transparent via-[#C9A227]/25 to-transparent animate-[hb-flash_0.85s_ease-out]" />
+      )}
+
       {/* ================= PANEL DE IMAGEN — fondo completo en móvil, panel lateral en desktop ================= */}
-     <div className="relative w-full h-72 sm:h-96 lg:h-auto lg:w-[50%] xl:w-[70%] overflow-hidden bg-[#0A0F1D] shrink-0">
+      <div
+        className={`relative w-full h-72 sm:h-96 lg:h-auto lg:w-[50%] xl:w-[70%] overflow-hidden bg-[#0A0F1D] shrink-0 transition-transform duration-[850ms] ease-[cubic-bezier(0.76,0,0.24,1)] ${
+          transicionExitosa ? "-translate-x-full" : "translate-x-0"
+        }`}
+      >
         <div
           className="absolute inset-0 hb-bg-kenburns bg-cover bg-no-repeat"
           style={{
@@ -147,7 +165,11 @@ const iniciarSesion = async (e: React.FormEvent) => {
       </div>
 
         {/* ================= PANEL PRINCIPAL — tarjeta arriba, texto debajo, en columna ================= */}
-      <div className="relative z-10 flex-1 flex items-center justify-center px-6 sm:px-10 py-12">
+       <div
+        className={`relative z-10 flex-1 flex items-center justify-center px-6 sm:px-10 py-12 transition-all duration-[850ms] ease-[cubic-bezier(0.76,0,0.24,1)] ${
+          transicionExitosa ? "translate-x-full opacity-0" : "translate-x-0 opacity-100"
+        }`}
+      >
         <div className="w-full max-w-[420px] flex flex-col items-center gap-4 lg:gap-10">
 
 

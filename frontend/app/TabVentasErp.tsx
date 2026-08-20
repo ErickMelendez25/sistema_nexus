@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Loader2,
   RefreshCw,
@@ -586,7 +586,73 @@ export function estadoGeneralDe(
   return "pendiente";
 }
 
+
+
+
+
+// Tipo mínimo de usuario para cruzar nombre -> foto de perfil. No se
+// importa de page.tsx porque este archivo es un módulo aparte — se
+// recibe por prop desde HelbotPage (que ya tiene el mapa completo
+// cargado desde /chat/usuarios apenas hace login).
+export interface UsuarioChatMini {
+  id: number;
+  nombre_completo: string;
+  foto_perfil: string | null;
+}
+
+// Cruza un nombre (ej. "Erick Anderson") contra el mapa de usuarios del
+// chat para encontrar su foto_perfil — mismo patrón que buscarFotoPorNombre
+// en page.tsx, pero local a este archivo. Primero intenta igualdad exacta
+// (ej. "Erick Anderson" === "Erick Anderson"); si no calza, cae a "empieza
+// con" porque los badges de categoría (Elias/Eliane/Victor) usan solo el
+// primer nombre, mientras que usuariosChatMap trae el nombre_completo.
+function buscarFotoPorNombreErp(
+  mapa: Record<number, UsuarioChatMini> | undefined,
+  nombre?: string | null
+): string | null {
+  if (!nombre || !mapa) return null;
+  const buscado = nombre.trim().toLowerCase();
+  const usuarios = Object.values(mapa);
+
+  const exacto = usuarios.find((u) => u.nombre_completo?.trim().toLowerCase() === buscado);
+  if (exacto) return exacto.foto_perfil ?? null;
+
+  const porPrefijo = usuarios.find((u) => u.nombre_completo?.trim().toLowerCase().startsWith(buscado));
+  return porPrefijo?.foto_perfil ?? null;
+}
+
+// Avatar chico con fallback a iniciales — igual que AvatarToastChat de
+// page.tsx, pero local a este archivo (no se puede importar de page.tsx).
+function AvatarUsuarioErp({ nombre, foto, tamano = 18 }: { nombre: string; foto: string | null; tamano?: number }) {
+  const [error, setError] = useState(false);
+  const inicial = nombre?.charAt(0).toUpperCase() || "?";
+  const tamanoPx = `${tamano}px`;
+  const tamanoFuente = `${Math.max(8, Math.round(tamano * 0.45))}px`;
+
+  if (!foto || error) {
+    return (
+      <div
+        style={{ width: tamanoPx, height: tamanoPx, fontSize: tamanoFuente, lineHeight: 1 }}
+        className="rounded-full bg-indigo-600 text-white flex items-center justify-center font-semibold shrink-0"
+      >
+        {inicial}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`${API_BASE}/archivos/${foto}`}
+      alt={nombre}
+      style={{ width: tamanoPx, height: tamanoPx }}
+      className="rounded-full object-cover shrink-0"
+      onError={() => setError(true)}
+    />
+  );
+}
+
 const ITEMS_POR_PAGINA = 24; // 4 columnas x 6 filas en desktop
+
 
 export interface TabVentasErpProps {
   ventas: VentaErp[];
@@ -607,13 +673,16 @@ export interface TabVentasErpProps {
   detallesPorOrden?: Record<number, Record<string, DetalleSeguimientoProducto>>;
   /** Nombre del usuario logueado — para restringir el filtro de Categoría a lo asignado a esa persona en el diccionario. */
   usuarioActual?: string;
+  /** Mapa id -> {nombre_completo, foto_perfil} de todos los usuarios de Helbot — para mostrar el avatar junto a "Rellenado por"/"Confirmado por". */
+  usuariosChatMap?: Record<number, UsuarioChatMini>;
 }
 // NOTA: este componente YA NO trae sus propios datos — los recibe por
 // props desde HelbotPage, que es quien hace fetch a /erp/ventas UNA sola
 // vez y los comparte con este tab y con el panel dividido del tab
 // "Monitor" (y los mantiene al día por WebSocket vía 'ventas_erp_actualizadas').
-export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion, onRefrescar, onAbrirOps, onIniciarOps, onVerOrdenExistente, seguimientosPorOrden, detallesPorOrden, usuarioActual }: TabVentasErpProps) {
+export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion, onRefrescar, onAbrirOps, onIniciarOps, onVerOrdenExistente, seguimientosPorOrden, detallesPorOrden, usuarioActual, usuariosChatMap }: TabVentasErpProps) {
   const [filtroTexto, setFiltroTexto] = useState("");
+  const [filtroOcf, setFiltroOcf] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
   const [filtroEmpresa, setFiltroEmpresa] = useState("");
   const [filtroDepartamento, setFiltroDepartamento] = useState("");
@@ -706,7 +775,7 @@ const etapasDisponibles = useMemo(
 const filtrosActivos = [
     filtroEstado, filtroEmpresa, filtroDepartamento, filtroEtapa,
     filtroCatalogo, filtroCategoria, filtroPersona, filtroFechaInicio, filtroFechaFin,
-    filtroSeguimiento, filtroRellenadoPor, filtroConfirmadoPor, filtroTexto, filtroPrivadas,
+    filtroSeguimiento, filtroRellenadoPor, filtroConfirmadoPor, filtroTexto, filtroOcf, filtroPrivadas,
   ].filter(Boolean).length;
 
   const filtradas = useMemo(() => {
@@ -734,18 +803,19 @@ const filtrosActivos = [
       const okRellenadoPor = !filtroRellenadoPor || usuariosDeVenta(v, "rellenado_por").includes(filtroRellenadoPor);
       const okConfirmadoPor = !filtroConfirmadoPor || usuariosDeVenta(v, "confirmado_por").includes(filtroConfirmadoPor);
       const okTexto = !filtroTexto || JSON.stringify(v).toLowerCase().includes(filtroTexto.toLowerCase());
-      return okEstado && okEmpresa && okDepartamento && okEtapa && okCatalogo && okCategoria && okPersona && okFecha && okPrivada && okSeguimiento && okRellenadoPor && okConfirmadoPor && okTexto;
+      const okOcf = !filtroOcf || String(v.codigoOcf || "").toLowerCase().includes(filtroOcf.toLowerCase());
+      return okEstado && okEmpresa && okDepartamento && okEtapa && okCatalogo && okCategoria && okPersona && okFecha && okPrivada && okSeguimiento && okRellenadoPor && okConfirmadoPor && okTexto && okOcf;
     });
   }, [
     ventas, filtroEstado, filtroEmpresa, filtroDepartamento, filtroEtapa, filtroCatalogo, filtroCategoria, filtroPersona,
-    filtroFechaInicio, filtroFechaFin, filtroPrivadas, filtroSeguimiento, filtroRellenadoPor, filtroConfirmadoPor, filtroTexto, seguimientosPorOrden, usuariosDeVenta,
+    filtroFechaInicio, filtroFechaFin, filtroPrivadas, filtroSeguimiento, filtroRellenadoPor, filtroConfirmadoPor, filtroTexto, filtroOcf, seguimientosPorOrden, usuariosDeVenta,
   ]);
   // reset de página cuando cambian los filtros
   useEffect(() => {
     setPagina(1);
   }, [
     filtroEstado, filtroEmpresa, filtroDepartamento, filtroEtapa, filtroCatalogo, filtroCategoria, filtroPersona,
-    filtroFechaInicio, filtroFechaFin, filtroSeguimiento, filtroRellenadoPor, filtroConfirmadoPor, filtroTexto,
+    filtroFechaInicio, filtroFechaFin, filtroSeguimiento, filtroRellenadoPor, filtroConfirmadoPor, filtroTexto, filtroOcf,
   ]);
 
   const totalPaginas = Math.max(1, Math.ceil(filtradas.length / ITEMS_POR_PAGINA));
@@ -759,6 +829,7 @@ const filtrosActivos = [
 
   const limpiarFiltros = () => {
     setFiltroTexto("");
+    setFiltroOcf("");
     setFiltroEstado("");
     setFiltroEmpresa("");
     setFiltroDepartamento("");
@@ -844,23 +915,47 @@ const filtrosActivos = [
         </div>
       )}
 
-      {/* Buscador combinado */}
-      <div className="relative mb-3">
-        <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input
-          placeholder="Buscar en cualquier campo (cliente, código, dirección, contacto...)"
-          value={filtroTexto}
-          onChange={(e) => setFiltroTexto(e.target.value)}
-          className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-9 py-2.5 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
-        />
-        {filtroTexto && (
-          <button
-            onClick={() => setFiltroTexto("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
-          >
-            <X size={14} />
-          </button>
-        )}
+      {/* Buscador combinado + filtro exclusivo de Orden Física (OCF) */}
+      <div className="flex items-stretch gap-2 mb-3">
+        <div className="relative flex-1 min-w-0">
+          <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            placeholder="Buscar en cualquier campo (cliente, código, dirección, contacto...)"
+            value={filtroTexto}
+            onChange={(e) => setFiltroTexto(e.target.value)}
+            className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-9 py-2.5 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
+          />
+          {filtroTexto && (
+            <button
+              onClick={() => setFiltroTexto("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        <div className="relative shrink-0 w-[120px]">
+          <FileCheck2 size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            title="Buscar por código de Orden Física (OCF)"
+            placeholder="OCF"
+            value={filtroOcf}
+            onChange={(e) => setFiltroOcf(e.target.value)}
+            style={{ fontFamily: "var(--font-mono)" }}
+            className={`w-full bg-white border rounded-lg pl-8 pr-7 py-2.5 text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 ${
+              filtroOcf ? "border-indigo-300" : "border-slate-200"
+            }`}
+          />
+          {filtroOcf && (
+            <button
+              onClick={() => setFiltroOcf("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Panel de filtros por columna */}
@@ -944,29 +1039,21 @@ const filtrosActivos = [
 
             
 
-            <div>
-              <label className="block text-[11px] font-medium text-slate-500 mb-1">Rellenado por</label>
-              <select
-                value={filtroRellenadoPor}
-                onChange={(e) => setFiltroRellenadoPor(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              >
-                <option value="">Todos</option>
-                {usuariosRellenoDisponibles.map((u) => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
+            <SelectUsuarioConFoto
+              label="Rellenado por"
+              valor={filtroRellenadoPor}
+              onChange={setFiltroRellenadoPor}
+              opciones={usuariosRellenoDisponibles}
+              usuariosChatMap={usuariosChatMap}
+            />
 
-            <div>
-              <label className="block text-[11px] font-medium text-slate-500 mb-1">Confirmado por</label>
-              <select
-                value={filtroConfirmadoPor}
-                onChange={(e) => setFiltroConfirmadoPor(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              >
-                <option value="">Todos</option>
-                {usuariosConfirmoDisponibles.map((u) => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
+            <SelectUsuarioConFoto
+              label="Confirmado por"
+              valor={filtroConfirmadoPor}
+              onChange={setFiltroConfirmadoPor}
+              opciones={usuariosConfirmoDisponibles}
+              usuariosChatMap={usuariosChatMap}
+            />
 
             <div className="flex items-end">
               <button
@@ -992,11 +1079,11 @@ const filtrosActivos = [
                     key={`r-${u}`}
                     onClick={() => setFiltroRellenadoPor((prev) => (prev === u ? "" : u))}
                     title={`Filtrar por rellenado por: ${u}`}
-                    className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-full border transition-colors ${
+                    className={`flex items-center gap-1.5 text-[11px] font-medium pl-1 pr-2 py-1 rounded-full border transition-colors ${
                       activo ? `${c.fondo} ${c.texto} ${c.borde}` : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+                    <AvatarUsuarioErp nombre={u} foto={buscarFotoPorNombreErp(usuariosChatMap, u)} tamano={16} />
                     {u}
                   </button>
                 );
@@ -1010,11 +1097,11 @@ const filtrosActivos = [
                     key={`c-${u}`}
                     onClick={() => setFiltroConfirmadoPor((prev) => (prev === u ? "" : u))}
                     title={`Filtrar por confirmado por: ${u}`}
-                    className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-full border transition-colors ${
+                    className={`flex items-center gap-1.5 text-[11px] font-medium pl-1 pr-2 py-1 rounded-full border transition-colors ${
                       activo ? `${c.fondo} ${c.texto} ${c.borde}` : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
                     }`}
                   >
-                    <ShieldCheck size={10} />
+                    <AvatarUsuarioErp nombre={u} foto={buscarFotoPorNombreErp(usuariosChatMap, u)} tamano={16} />
                     {u}
                   </button>
                 );
@@ -1050,6 +1137,7 @@ const filtrosActivos = [
                 onVerOrdenExistente={onVerOrdenExistente}
                 seguimientosPorOrden={seguimientosPorOrden}
                 detallesPorOrden={detallesPorOrden}
+                usuariosChatMap={usuariosChatMap}
               />
             ))}
           </div>
@@ -1098,6 +1186,96 @@ function SelectFiltro({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// Dropdown personalizado con foto de perfil junto a cada opción — un
+// <select> nativo de HTML NO puede mostrar imágenes dentro de <option>
+// (limitación del navegador, no del código), así que para los filtros
+// "Rellenado por" / "Confirmado por" se arma este componente a mano con
+// <div>/<button>, que sí puede llevar el avatar.
+function SelectUsuarioConFoto({
+  label,
+  valor,
+  onChange,
+  opciones,
+  usuariosChatMap,
+}: {
+  label: string;
+  valor: string;
+  onChange: (v: string) => void;
+  opciones: string[];
+  usuariosChatMap?: Record<number, UsuarioChatMini>;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  // El panel del filtro (más arriba en el árbol) tiene overflow-hidden
+  // para su animación de colapso — eso recorta cualquier <div absolute>
+  // que se desborde hacia abajo, cortando la lista a solo 2-3 opciones
+  // visibles aunque haya más. Se calcula la posición real del botón y el
+  // dropdown se dibuja con position: fixed, así "escapa" ese recorte.
+  const botonRef = useRef<HTMLButtonElement>(null);
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0 });
+
+  const abrir = () => {
+    const rect = botonRef.current?.getBoundingClientRect();
+    if (rect) {
+      setCoords({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    }
+    setAbierto((v) => !v);
+  };
+
+  return (
+    <div className="relative">
+      <label className="block text-[11px] font-medium text-slate-500 mb-1">{label}</label>
+      <button
+        ref={botonRef}
+        type="button"
+        onClick={abrir}
+        className="w-full flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+      >
+        <span className="flex items-center gap-2 truncate">
+          {valor ? (
+            <>
+              <AvatarUsuarioErp nombre={valor} foto={buscarFotoPorNombreErp(usuariosChatMap, valor)} tamano={18} />
+              <span className="truncate">{valor}</span>
+            </>
+          ) : (
+            <span className="text-slate-400">Todos</span>
+          )}
+        </span>
+        <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform ${abierto ? "rotate-180" : ""}`} />
+      </button>
+
+      {abierto && (
+        <>
+          {/* Overlay invisible para cerrar el dropdown al hacer clic afuera */}
+          <div className="fixed inset-0 z-[100]" onClick={() => setAbierto(false)} />
+          <div
+            style={{ top: coords.top, left: coords.left, width: coords.width }}
+            className="fixed z-[101] bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-y-auto py-1"
+          >
+            <button
+              type="button"
+              onClick={() => { onChange(""); setAbierto(false); }}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-slate-50 ${!valor ? "bg-indigo-50 text-[#4F46E5] font-medium" : "text-slate-600"}`}
+            >
+              Todos
+            </button>
+            {opciones.map((o) => (
+              <button
+                key={o}
+                type="button"
+                onClick={() => { onChange(o); setAbierto(false); }}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-slate-50 ${valor === o ? "bg-indigo-50 text-[#4F46E5] font-medium" : "text-slate-600"}`}
+              >
+                <AvatarUsuarioErp nombre={o} foto={buscarFotoPorNombreErp(usuariosChatMap, o)} tamano={18} />
+                <span className="truncate">{o}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1197,6 +1375,7 @@ export function CardVentaErp({
   onVerOrdenExistente,
   seguimientosPorOrden,
   detallesPorOrden,
+  usuariosChatMap,
 }: {
   v: VentaErp;
   /** true si este código de venta NO aparece en la lista de Publicadas — lo pinta el comparador del tab Monitor. */
@@ -1211,6 +1390,8 @@ export function CardVentaErp({
   seguimientosPorOrden?: Record<number, Record<string, string>>;
   /** {orden_compra_id: {producto_codigo: detalle}} — para mostrar quién rellenó/confirmó. */
   detallesPorOrden?: Record<number, Record<string, DetalleSeguimientoProducto>>;
+  /** Mapa id -> {nombre_completo, foto_perfil} — para mostrar el avatar junto a cada nombre. */
+  usuariosChatMap?: Record<number, UsuarioChatMini>;
 }) {
   const [expandido, setExpandido] = useState(false);
   const [mostrarTodasCategorias, setMostrarTodasCategorias] = useState(false);
@@ -1242,13 +1423,19 @@ return (
         <div className="absolute top-3 right-3 flex flex-col items-end gap-1">
           {personasDeVenta(v).map((p) => {
             const c = colorUsuario(p);
+            const nombreEtiqueta = etiquetaPersona(p);
             return (
               <span
                 key={p}
-                title={`Categoría(s) asignada(s) a ${etiquetaPersona(p)}`}
-                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${c.fondo} ${c.texto} ${c.borde}`}
+                title={`Categoría(s) asignada(s) a ${nombreEtiqueta}`}
+                className={`flex items-center gap-1.5 text-[11px] font-semibold pl-1 pr-2.5 py-1 rounded-full border ${c.fondo} ${c.texto} ${c.borde}`}
               >
-                {etiquetaPersona(p)}
+                <AvatarUsuarioErp
+                  nombre={nombreEtiqueta}
+                  foto={buscarFotoPorNombreErp(usuariosChatMap, nombreEtiqueta)}
+                  tamano={18}
+                />
+                {nombreEtiqueta}
               </span>
             );
           })}
@@ -1454,9 +1641,9 @@ return (
                   <span
                     key={`r-${n}`}
                     title={`Rellenado por ${n}`}
-                    className={`flex items-center gap-1 text-[11px] font-medium pl-1.5 pr-2 py-1 rounded-full border ${c.fondo} ${c.texto} ${c.borde}`}
+                    className={`flex items-center gap-1.5 text-[11px] font-medium pl-1 pr-2 py-1 rounded-full border ${c.fondo} ${c.texto} ${c.borde}`}
                   >
-                    <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+                    <AvatarUsuarioErp nombre={n} foto={buscarFotoPorNombreErp(usuariosChatMap, n)} tamano={18} />
                     {n}
                   </span>
                 );
@@ -1467,9 +1654,9 @@ return (
                   <span
                     key={`c-${n}`}
                     title={`Confirmado por ${n}`}
-                    className={`flex items-center gap-1 text-[11px] font-medium pl-1.5 pr-2 py-1 rounded-full border ${c.fondo} ${c.texto} ${c.borde}`}
+                    className={`flex items-center gap-1.5 text-[11px] font-medium pl-1 pr-2 py-1 rounded-full border ${c.fondo} ${c.texto} ${c.borde}`}
                   >
-                    <ShieldCheck size={10} />
+                    <AvatarUsuarioErp nombre={n} foto={buscarFotoPorNombreErp(usuariosChatMap, n)} tamano={18} />
                     {n}
                   </span>
                 );

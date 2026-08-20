@@ -7,6 +7,8 @@ import { useState } from "react";
 import { EmpresaOption, calcularMargen } from "./erp-shared";
 import { VisorDocumentos, nombreDesdeUrl } from "./FormularioProductoModal";
 
+import { HistorialPrecioProveedor, HistorialPrecioFlete } from "./HistorialComercialCard";
+
 interface ProductoBloqueForm {
   codigo: string;
   descripcion: string;
@@ -21,9 +23,11 @@ interface ProductoBloqueForm {
 }
 
 interface CompartidoBloque {
+  proveedor_id: string;
   proveedor_nombre: string;
   proveedor_telefono: string;
   tipo_envio: string;
+  transporte_id: string;
   agencia_transporte: string;
   observaciones: string;
   otras_observaciones: string;
@@ -61,6 +65,11 @@ interface Props {
   urlOce?: string | null;
   urlOcf?: string | null;
 
+  clienteId?: number | string | null;
+  departamentoEntrega?: string | null;
+  provinciaEntrega?: string | null;
+  distritoEntrega?: string | null;
+
   renderBuscadorProveedor: () => React.ReactNode;
   renderBuscadorTransporte: () => React.ReactNode;
   renderContactoProveedor: () => React.ReactNode;
@@ -89,6 +98,10 @@ export default function FormularioBloqueModal({
   pdfConsolidadoUrl,
   urlOce,
   urlOcf,
+  clienteId,
+  departamentoEntrega,
+  provinciaEntrega,
+  distritoEntrega,
   renderBuscadorProveedor,
   renderBuscadorTransporte,
   renderContactoProveedor,
@@ -129,6 +142,14 @@ export default function FormularioBloqueModal({
 
             {renderBuscadorProveedor()}
             {renderContactoProveedor()}
+
+            <HistorialPrecioProveedor
+              codigo={tabActivo || items[0]?.codigo}
+              clienteId={clienteId}
+              departamento={departamentoEntrega}
+              provincia={provinciaEntrega}
+              distrito={distritoEntrega}
+            />
 
             <CampoSimple
               label="Teléfono proveedor"
@@ -198,6 +219,14 @@ export default function FormularioBloqueModal({
             {compartido.tipo_envio === "AGENCIA" ? (
               <div className="space-y-2">
                 {renderBuscadorTransporte()}
+                <HistorialPrecioFlete
+                  transporteId={compartido.transporte_id}
+                  transporteNombre={compartido.agencia_transporte}
+                  clienteId={clienteId}
+                  departamento={departamentoEntrega}
+                  provincia={provinciaEntrega}
+                  distrito={distritoEntrega}
+                />
                 <div>
                   <label className="block text-[11px] font-medium text-slate-500 mb-1">Observaciones transporte</label>
                   <textarea

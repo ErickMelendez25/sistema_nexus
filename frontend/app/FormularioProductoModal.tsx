@@ -7,6 +7,7 @@ import {
   Image as ImageIcon, Calendar, Landmark, UserCheck,
 } from "lucide-react";
 import { EmpresaOption } from "./erp-shared";
+import { HistorialPrecioProveedor, HistorialPrecioFlete } from "./HistorialComercialCard";
 
 /* ============================================================
    Estos tipos deben ser EXACTAMENTE los mismos que ya existen en
@@ -104,6 +105,13 @@ interface Props {
   urlOce?: string | null;
   urlOcf?: string | null;
 
+  // Historial comercial — ubicación y cliente de la venta, para
+  // filtrar las tarjetas de precios de referencia.
+  clienteId?: number | string | null;
+  departamentoEntrega?: string | null;
+  provinciaEntrega?: string | null;
+  distritoEntrega?: string | null;
+
   // Estado de seguimiento (para textos/badges del footer)
   estado: "pendiente" | "preview" | "confirmado" | "subido";
   rellenadoPor?: string | null;
@@ -173,6 +181,7 @@ export default function FormularioProductoModal({
   form,
   actualizarCampo,
   soloLectura,
+  proveedores,
   empresas,
   cargandoEmpresas,
   esSeguimiento,
@@ -195,7 +204,14 @@ export default function FormularioProductoModal({
   renderSelectorImagenes,
   urlOce,
   urlOcf,
+  clienteId,
+  departamentoEntrega,
+  provinciaEntrega,
+  distritoEntrega,
 }: Props) {
+
+
+
   const faltantes = faltantesDe(form);
   const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
   const [visorEvidencia, setVisorEvidencia] = useState<{ url: string; titulo: string } | null>(null);
@@ -268,6 +284,14 @@ return (
                   {renderBuscadorProveedor()}
                   {renderContactoProveedor()}
 
+                  <HistorialPrecioProveedor
+                    codigo={codigo}
+                    proveedores={proveedores}
+                    clienteId={clienteId}
+                    departamento={departamentoEntrega}
+                    provincia={provinciaEntrega}
+                    distrito={distritoEntrega}
+                  />
                   <div className="grid grid-cols-2 gap-3">
                     <CampoSimple
                       label="Teléfono proveedor"
@@ -410,6 +434,14 @@ return (
                   {form.tipo_envio === "AGENCIA" ? (
                     <div className="space-y-2.5">
                       {renderBuscadorTransporte()}
+                      <HistorialPrecioFlete
+                        transporteId={form.transporte_id}
+                        transporteNombre={form.agencia_transporte}
+                        clienteId={clienteId}
+                        departamento={departamentoEntrega}
+                        provincia={provinciaEntrega}
+                        distrito={distritoEntrega}
+                      />
                       <CampoSimple
                         label="Precio flete"
                         value={form.precio_flete}

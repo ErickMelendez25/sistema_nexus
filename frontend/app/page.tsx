@@ -1,14 +1,28 @@
 ﻿  "use client";
 
-  import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-  import { useRouter } from "next/navigation";
-  import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
-  import {
-    Radar, Bell, FileScan, Search, CheckCircle2, Circle, Loader2,
-    Upload, Wifi, WifiOff, ShieldCheck, DollarSign, RefreshCw, ChevronRight,
-    AlertTriangle, X, LogIn, Menu, LucideIcon, GitCompareArrows, ChevronDown, ChevronUp,
-  LogOut, BarChart3, User, Briefcase, PieChart, MessageSquare,
-  } from "lucide-react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
+import {
+  Radar, Bell, FileScan, Search, CheckCircle2, Circle, Loader2,
+  Upload, Wifi, WifiOff, ShieldCheck, DollarSign, RefreshCw, ChevronRight,
+  AlertTriangle, X, LogIn, Menu, LucideIcon, GitCompareArrows, ChevronDown, ChevronUp,
+LogOut, BarChart3, User, Briefcase, PieChart, MessageSquare, Send, Percent, Clock,
+} from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart as RePieChart,
+  Pie,
+  Cell,
+  LabelList,
+} from "recharts";
 
   import TabVentasErp, {
     VentaErp,
@@ -319,13 +333,31 @@ interface ResumenChat {
   // inicial del nombre si no hay foto O si la foto guardada ya no existe
   // en el servidor (archivo borrado). Sin esto, el toast mostraba el
   // ícono de imagen rota del navegador en vez de algo consistente.
-  function AvatarToastChat({ nombre, foto }: { nombre: string; foto: string | null }) {
+  function AvatarToastChat({
+    nombre,
+    foto,
+    tamano = 32,
+  }: {
+    nombre: string;
+    foto: string | null;
+    /** Diámetro del avatar en píxeles. Antes era un tamaño fijo (28px)
+     * sin importar el contenedor donde se usara — si el wrapper era más
+     * chico (ej. w-5 en la tabla), el círculo de iniciales se desbordaba
+     * y quedaba descentrado, viéndose como una medialuna. Ahora cada
+     * lugar que lo usa pasa su propio tamano y siempre calza exacto. */
+    tamano?: number;
+  }) {
     const [error, setError] = useState(false);
     const inicial = nombre?.charAt(0).toUpperCase() || "?";
+    const tamanoPx = `${tamano}px`;
+    const tamanoFuente = `${Math.max(9, Math.round(tamano * 0.4))}px`;
 
     if (!foto || error) {
       return (
-        <div className="w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[11px] font-semibold shrink-0">
+        <div
+          style={{ width: tamanoPx, height: tamanoPx, fontSize: tamanoFuente, lineHeight: 1 }}
+          className="rounded-full bg-indigo-600 text-white flex items-center justify-center font-semibold shrink-0"
+        >
           {inicial}
         </div>
       );
@@ -335,10 +367,47 @@ interface ResumenChat {
       <img
         src={`${API_BASE}/archivos/${foto}`}
         alt={nombre}
-        className="w-7 h-7 rounded-full object-cover shrink-0"
+        style={{ width: tamanoPx, height: tamanoPx }}
+        className="rounded-full object-cover shrink-0"
         onError={() => setError(true)}
       />
     );
+  }
+
+  // Las notificaciones/alertas solo traen el NOMBRE del usuario que hizo
+  // la acción (ej. rellenado_por: "Juan Pérez"), no su foto ni su id.
+  // Esta función lo cruza contra usuariosChatMap (que sí tiene
+  // nombre_completo + foto_perfil de todos) para poder mostrar el avatar.
+  function buscarFotoPorNombre(
+    mapa: Record<number, UsuarioChat>,
+    nombre?: string | null
+  ): string | null {
+    if (!nombre) return null;
+    const encontrado = Object.values(mapa).find(
+      (u) => u.nombre_completo?.trim().toLowerCase() === nombre.trim().toLowerCase()
+    );
+    return encontrado?.foto_perfil ?? null;
+  }
+
+  // Extrae el nombre del usuario responsable de una notificación/alerta,
+  // según su tipo — centraliza la misma lógica que ya se repetía en el
+  // panel de notificaciones y en las alertas flotantes.
+  function nombreUsuarioDeAlerta(a: Alerta): string {
+    switch (a.tipo) {
+      case "op_rellenada":
+      case "op_rellenada_bloque":
+        return String(a.rellenado_por || "");
+      case "op_confirmada":
+        return String(a.confirmado_por || "");
+      case "op_subida_erp":
+        return String(a.subido_por || "");
+      case "op_actualizada_erp":
+        return String(a.actualizado_por || "");
+      case "mef_completado":
+        return String(a.completado_por || "");
+      default:
+        return "";
+    }
   }
 
   export default function HelbotPage() {
@@ -613,6 +682,22 @@ interface ResumenChat {
       }
     }, []);
 
+    // Trae la lista de usuarios (nombre + foto de perfil) apenas hay
+    // sesión — antes esto SOLO lo hacía ChatPanel al montarse (o sea,
+    // recién cuando el usuario entraba al tab "Chat"). Sin esto, las
+    // fotos de perfil en notificaciones/alertas/auditoría se quedaban
+    // vacías hasta que alguien visitaba el chat al menos una vez.
+    const cargarUsuariosChat = useCallback(async () => {
+      try {
+        const r = await fetchConToken(`${API_BASE}/chat/usuarios`);
+        if (!r.ok) return;
+        const data: UsuarioChat[] = await r.json();
+        manejarUsuariosChatCargados(data);
+      } catch {
+        /* noop */
+      }
+    }, [manejarUsuariosChatCargados]);
+
     const cerrarSesion = useCallback(() => {
       wsChatRef.current?.close();
       localStorage.removeItem("helbot_token");
@@ -666,6 +751,7 @@ interface ResumenChat {
   useEffect(() => {
       if (!usuario) return;
       cargarResumenChats();
+      cargarUsuariosChat();
 
       const token = localStorage.getItem("helbot_token");
       if (!token) return;
@@ -784,7 +870,7 @@ interface ResumenChat {
         ws.close();
         wsChatRef.current = null;
       };
-    }, [usuario?.id, cargarResumenChats]);
+        }, [usuario?.id, cargarResumenChats, cargarUsuariosChat]);
 
     // Desbloquea el AudioContext con el primer clic/tecla del usuario en la
     // página (login, cambiar de tab, lo que sea) — así, cuando llegue la
@@ -922,6 +1008,11 @@ interface ResumenChat {
     const cacheEntregas = useRef<Map<number, EntregaDetalle | null>>(new Map());
     const cacheUbigeoOcr = useRef<Map<number, { departamento: string; provincia: string; distrito: string } | null>>(new Map());
     const [ventaOpsAbierta, setVentaOpsAbierta] = useState<VentaErp | null>(null);
+    // Key `${ordenCompraId}:${productoCodigo}` de la fila que se está
+    // abriendo desde la tabla de Auditoría — controla el loader global
+    // (bloquea toda la pantalla mientras se resuelve) y el spinner
+    // puntual en esa fila específica.
+    const [productoAperturaEnCurso, setProductoAperturaEnCurso] = useState<string | null>(null);
 
     // Modal único de CrearOrdenModal para toda la página, en 3 modos:
     //  - "ocr": card de Perú Compras sin venta en el ERP (flujo OCR)
@@ -1256,7 +1347,7 @@ interface ResumenChat {
       cargarPublicadas();
     }, [uidViendo, cargarPublicadas]);
 
-    const cargarVentasErp = useCallback(async (forzar = false) => {
+    const cargarVentasErp = useCallback(async (forzar = false): Promise<VentaErp[] | null> => {
       setCargandoVentasErp(true);
       setErrorVentasErp("");
       setSinSesionErp(false);
@@ -1265,23 +1356,91 @@ interface ResumenChat {
         if (r.status === 401) {
           setSinSesionErp(true);
           setVentasErp([]);
-          return;
+          return [];
         }
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
           throw new Error(body.detail || `Error HTTP ${r.status}`);
         }
         const data = await r.json();
-        setVentasErp(data.ventas || []);
+        const ventas = data.ventas || [];
+        setVentasErp(ventas);
         setMetaVentasErp({ paginas: data.paginas, actualizado: data.actualizado });
+        return ventas;
       } catch (e) {
         setErrorVentasErp(e instanceof Error ? e.message : "Error desconocido");
+        return null;
       } finally {
         setCargandoVentasErp(false);
       }
     }, []);
 
+    // Abre el drawer de Operaciones (OpsDrawer) directo en el producto
+    // clickeado desde la tabla de Auditoría — no cambia de tab, porque
+    // OpsDrawer es un overlay que se renderiza sin importar el tab activo.
+    const abrirProductoDesdeAuditoria = useCallback(
+      async (ordenCompraId: number, productoCodigo: string) => {
+        // Ya hay una fila abriéndose — ignora clics extra hasta que termine.
+        if (productoAperturaEnCurso) return;
+        const clave = `${ordenCompraId}:${productoCodigo}`;
+        setProductoAperturaEnCurso(clave);
+        try {
+          let venta = ventasErp.find((v) => Number(v.id) === Number(ordenCompraId));
 
+          // No estaba en la caché local — puede ser una orden antigua que
+          // no vino en el snapshot inicial. En vez de rendirnos, forzamos
+          // un refresco directo al ERP real y buscamos en el array recién
+          // devuelto (NO en el estado `ventasErp`, que aún no se habría
+          // actualizado por el delay normal de React).
+          if (!venta) {
+            const frescas = await cargarVentasErp(true);
+            venta = (frescas || []).find((v) => Number(v.id) === Number(ordenCompraId));
+          }
+
+          if (!venta) {
+            agregarAlertaFlotante({
+              id: Date.now() + Math.random(),
+              tipo: "info_sin_datos",
+              leida: true,
+              creado_en: new Date().toISOString(),
+              titulo: "No se encontró la venta",
+              mensaje: sinSesionErp
+                ? "No hay sesión activa en el ERP. Inicia sesión con el botón 'ERP' del sidebar y vuelve a intentar."
+                : "Esta venta no está en el ERP cargado actualmente. Puede ser muy antigua o ya no existir en el sistema.",
+            } as Alerta);
+            return;
+          }
+
+          // Averigua si este producto es parte de un envío en BLOQUE
+          // (grupo_envio_id) — si lo es, hay que abrir el modal de bloque
+          // completo (PanelEnvioBloque dentro de OpsDrawer), no el
+          // formulario individual, o el usuario vería datos incompletos.
+          let grupoEnvioId: string | undefined;
+          try {
+            const rSeg = await fetch(`${API_BASE}/erp/ordenes/${venta.id}/productos-seguimiento`);
+            if (rSeg.ok) {
+              const seguimientos = await rSeg.json();
+              const seg = Array.isArray(seguimientos)
+                ? seguimientos.find((s: any) => String(s.producto_codigo).trim() === productoCodigo.trim())
+                : null;
+              if (seg?.grupo_envio_id) grupoEnvioId = String(seg.grupo_envio_id);
+            }
+          } catch {
+            // Si esto falla igual abrimos el producto individual — no bloquea el flujo.
+          }
+
+          setVentaOpsAbierta({
+            ...venta,
+            _modoCrear: true,
+            _productoAbrir: productoCodigo,
+            _grupoAbrir: grupoEnvioId,
+          } as any);
+        } finally {
+          setProductoAperturaEnCurso(null);
+        }
+      },
+      [ventasErp, cargarVentasErp, sinSesionErp, productoAperturaEnCurso]
+    );
 
     const cargarSeguimientosProductos = useCallback(async () => {
     try {
@@ -1891,6 +2050,15 @@ const tabs = esAdmin
                             n.leida ? "bg-transparent" : "bg-[#4F46E5]"
                           }`}
                         />
+                        {nombreUsuarioDeAlerta(n) && (
+                          <div className="rounded-full overflow-hidden shrink-0 mt-0.5">
+                            <AvatarToastChat
+                              nombre={nombreUsuarioDeAlerta(n)}
+                              foto={buscarFotoPorNombre(usuariosChatMap, nombreUsuarioDeAlerta(n))}
+                              tamano={32}
+                            />
+                          </div>
+                        )}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <p className={`text-xs truncate ${n.leida ? "font-medium text-slate-500" : "font-semibold text-slate-800"}`}>
@@ -1987,16 +2155,23 @@ const tabs = esAdmin
               className="hb-slide-in bg-white border border-slate-200 rounded-xl p-3 shadow-lg shadow-slate-900/5 cursor-pointer hover:border-indigo-300 transition-colors"
             >
               <div className="flex items-start gap-2.5">
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 overflow-hidden ${
-                  a.tipo === "chat_mensaje" ? "" : "bg-indigo-50"
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 overflow-hidden ${
+                  a.tipo === "chat_mensaje" || nombreUsuarioDeAlerta(a) ? "" : "bg-indigo-50"
                 }`}>
                   {a.tipo === "chat_mensaje" ? (
                     <AvatarToastChat
                       nombre={String(a.emisor_nombre || "")}
                       foto={(a.emisor_foto as string | null) ?? null}
+                      tamano={32}
+                    />
+                  ) : nombreUsuarioDeAlerta(a) ? (
+                    <AvatarToastChat
+                      nombre={nombreUsuarioDeAlerta(a)}
+                      foto={buscarFotoPorNombre(usuariosChatMap, nombreUsuarioDeAlerta(a))}
+                      tamano={32}
                     />
                   ) : (
-                    <Bell size={13} className="text-[#4F46E5] hb-pulse" />
+                    <Bell size={15} className="text-[#4F46E5] hb-pulse" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -2023,6 +2198,8 @@ const tabs = esAdmin
                       ? `${String(a.completado_por || "Seguimiento")} completó el MEF en el ERP`
                       : a.tipo === "nueva_publicada"
                       ? `Nueva publicada · ${String(a.C_OrdenCompra || "")}`
+                      : a.tipo === "info_sin_datos"
+                      ? String(a.titulo || "Aviso")
                       : "Nueva publicada detectada"}
                   </p>
                   <p style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] text-slate-500 truncate">
@@ -2090,6 +2267,7 @@ const tabs = esAdmin
             detallesPorOrden={detallesPorOrden}
             resaltarPublicada={publicadaResaltada}
             onResaltadoAplicado={limpiarPublicadaResaltada}
+            usuariosChatMap={usuariosChatMap}
           />
         )}
           {tab === "ficha" && <TabFichaOcr publicadas={publicadas} />}
@@ -2108,9 +2286,18 @@ const tabs = esAdmin
               seguimientosPorOrden={seguimientosPorOrden}
               detallesPorOrden={detallesPorOrden}
               usuarioActual={usuarioActual}
+              usuariosChatMap={usuariosChatMap}
             />
           )}
-          {tab === "auditoria" && <TabAuditoria tick={tickAuditoria} />}
+          {tab === "auditoria" && (
+            <TabAuditoria
+              tick={tickAuditoria}
+              usuariosChatMap={usuariosChatMap}
+              ventasErp={ventasErp}
+              onAbrirProducto={abrirProductoDesdeAuditoria}
+              filaCargando={productoAperturaEnCurso}
+            />
+          )}
 
             {/* 👇 AGREGAR ESTO */}
             {tab === "chat" && (
@@ -2261,6 +2448,24 @@ const tabs = esAdmin
       </div>
         </div>
 
+        {productoAperturaEnCurso && (
+          <div className="fixed inset-0 z-[600] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-4 px-10 py-8 rounded-2xl bg-white/95 shadow-2xl">
+              <div className="relative w-14 h-14">
+                <div className="absolute inset-0 rounded-full border-[3px] border-indigo-100" />
+                <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-[#4F46E5] border-r-[#4F46E5] animate-spin" />
+                <div className="absolute inset-[10px] rounded-full bg-indigo-50 flex items-center justify-center">
+                  <FileScan size={16} className="text-[#4F46E5]" />
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-bold text-slate-800">Abriendo producto…</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Verificando datos en el ERP</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <LlamadaOverlay
           llamada={llamada}
           micActivo={micActivo}
@@ -2391,6 +2596,7 @@ const tabs = esAdmin
     detallesPorOrden,
     resaltarPublicada,
     onResaltadoAplicado,
+    usuariosChatMap,
   }: {
     publicadas: Publicada[];
     onRefrescar: () => void;
@@ -2413,6 +2619,8 @@ const tabs = esAdmin
     resaltarPublicada?: { id: number; tick: number } | null;
     /** Se llama cuando la card ya hizo su scroll+parpadeo, para limpiar el estado. */
     onResaltadoAplicado?: () => void;
+    /** Mapa id -> {nombre_completo, foto_perfil} — para el avatar en las cards de Ventas ERP del panel dividido. */
+    usuariosChatMap?: Record<number, UsuarioChat>;
   }) {
 
     const [filtroAcuerdo, setFiltroAcuerdo] = useState("");
@@ -2724,6 +2932,7 @@ const tabs = esAdmin
                     onVerOrdenExistente={onVerOrdenExistente}
                     seguimientosPorOrden={seguimientosPorOrden}
                     detallesPorOrden={detallesPorOrden}
+                    usuariosChatMap={usuariosChatMap}
                   />
                 ))}
               </div>
@@ -3711,211 +3920,434 @@ const tabs = esAdmin
     return d.toLocaleString("es-PE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
 
-  function TabAuditoria({ tick }: { tick?: number }) {
-    const [detalle, setDetalle] = useState<FilaAuditoria[]>([]);
-    const [resumen, setResumen] = useState<ResumenUsuario[]>([]);
-    const [cargando, setCargando] = useState(true);
-    const [error, setError] = useState("");
-    const [filtroUsuario, setFiltroUsuario] = useState("");
-    const [filtroEstado, setFiltroEstado] = useState("");
-    const [filtroTexto, setFiltroTexto] = useState("");
+const COLORES_ESTADO: Record<string, string> = {
+  preview: "#f59e0b",
+  confirmado: "#4F46E5",
+  subido: "#10b981",
+};
 
-    const cargar = useCallback(async () => {
-      setCargando(true);
-      setError("");
-      try {
-        const r = await fetch(`${API_BASE}/erp/estadisticas/seguimiento`);
-        if (!r.ok) throw new Error((await r.json()).detail || `Error HTTP ${r.status}`);
-        const data = await r.json();
-        setDetalle(data.detalle || []);
-        setResumen(data.resumen || []);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Error desconocido");
-      } finally {
-        setCargando(false);
-      }
-    }, []);
+function KpiCard({
+  icon: Icono,
+  label,
+  valor,
+  color,
+}: {
+  icon: LucideIcon;
+  label: string;
+  valor: string | number;
+  color: "amber" | "orange" | "indigo" | "emerald" | "slate";
+}) {
+  const estilos: Record<string, string> = {
+    amber: "bg-amber-50 text-amber-600",
+    orange: "bg-orange-50 text-orange-600",
+    indigo: "bg-indigo-50 text-[#4F46E5]",
+    emerald: "bg-emerald-50 text-emerald-600",
+    slate: "bg-slate-100 text-slate-600",
+  };
+  return (
+    <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-300 hover:shadow-sm transition-all">
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${estilos[color]}`}>
+        <Icono size={17} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-[10px] text-slate-400 leading-none mb-1.5 truncate">{label}</p>
+        <p style={{ fontFamily: "var(--font-display)" }} className="text-lg font-bold text-slate-800 leading-none">{valor}</p>
+      </div>
+    </div>
+  );
+}
+
+function TabAuditoria({
+  tick,
+  usuariosChatMap,
+  ventasErp,
+  onAbrirProducto,
+  filaCargando,
+}: {
+  tick?: number;
+  usuariosChatMap: Record<number, UsuarioChat>;
+  /** Ventas del ERP ya cargadas — para resolver a qué venta pertenece
+   * un producto de la tabla y poder abrir su drawer. */
+  ventasErp?: VentaErp[];
+  /** Abre OpsDrawer directo en el producto clickeado de la tabla. */
+  onAbrirProducto?: (ordenCompraId: number, productoCodigo: string) => void;
+  /** Key `${orden_compra_id}:${producto_codigo}` de la fila que se está
+   * abriendo en este momento — pinta el spinner puntual en esa fila. */
+  filaCargando?: string | null;
+}) {
+  const [detalle, setDetalle] = useState<FilaAuditoria[]>([]);
+  const [resumen, setResumen] = useState<ResumenUsuario[]>([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState("");
+  const [filtroUsuario, setFiltroUsuario] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("");
+  const [filtroTexto, setFiltroTexto] = useState("");
+
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/erp/estadisticas/seguimiento`);
+      if (!r.ok) throw new Error((await r.json()).detail || `Error HTTP ${r.status}`);
+      const data = await r.json();
+      setDetalle(data.detalle || []);
+      setResumen(data.resumen || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error desconocido");
+    } finally {
+      setCargando(false);
+    }
+  }, []);
 
   useEffect(() => {
+    cargar();
+  }, [cargar]);
+
+  useEffect(() => {
+    if (tick !== undefined) {
       cargar();
-    }, [cargar]);
+    }
+  }, [tick, cargar]);
 
-    // Se refresca solo cuando llega una notificación relevante por WebSocket
-    // (op_rellenada / op_confirmada / op_subida_erp) — así la tabla de
-    // auditoría queda en vivo sin que el usuario tenga que tocar "Refrescar".
-    useEffect(() => {
-      if (tick !== undefined) {
-        cargar();
-      }
-    }, [tick, cargar]);
-    const usuariosDisponibles = useMemo(
-      () => Array.from(new Set(resumen.map((r) => r.usuario))).sort(),
-      [resumen]
-    );
+  const usuariosDisponibles = useMemo(
+    () => Array.from(new Set(resumen.map((r) => r.usuario))).sort(),
+    [resumen]
+  );
 
-    const filasFiltradas = useMemo(() => {
-      return detalle.filter((f) => {
-        const okUsuario =
-          !filtroUsuario ||
-          f.rellenado_por === filtroUsuario ||
-          f.confirmado_por === filtroUsuario;
-        const okEstado = !filtroEstado || f.estado === filtroEstado;
-        const okTexto =
-          !filtroTexto ||
-          JSON.stringify(f).toLowerCase().includes(filtroTexto.toLowerCase());
-        return okUsuario && okEstado && okTexto;
-      });
-    }, [detalle, filtroUsuario, filtroEstado, filtroTexto]);
+  // "Pendientes" = lo que ESE usuario ya envió (rellenado_por) pero
+  // sigue en estado "preview" — seguimiento todavía no lo confirmó.
+  const resumenConPendientes = useMemo(() => {
+    return resumen.map((r) => ({
+      ...r,
+      pendientes: detalle.filter((f) => f.rellenado_por === r.usuario && f.estado === "preview").length,
+    }));
+  }, [resumen, detalle]);
 
-    return (
-      <div>
-        <div className="flex items-start sm:items-end justify-between mb-6 flex-wrap gap-3">
-          <div>
-            <h2
-              style={{ fontFamily: "var(--font-display)" }}
-              className="text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight"
-            >
-              Auditoría de seguimiento
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Quién de ventas envió cada producto a revisión y quién de seguimiento lo confirmó.
-            </p>
-          </div>
-          <button
-            onClick={cargar}
-            disabled={cargando}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:border-slate-300 hover:text-slate-900 transition-colors disabled:opacity-50"
-          >
-            {cargando ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            Refrescar
-          </button>
+  const filasFiltradas = useMemo(() => {
+    return detalle.filter((f) => {
+      const okUsuario =
+        !filtroUsuario ||
+        f.rellenado_por === filtroUsuario ||
+        f.confirmado_por === filtroUsuario;
+      const okEstado = !filtroEstado || f.estado === filtroEstado;
+      const okTexto =
+        !filtroTexto ||
+        JSON.stringify(f).toLowerCase().includes(filtroTexto.toLowerCase());
+      return okUsuario && okEstado && okTexto;
+    });
+  }, [detalle, filtroUsuario, filtroEstado, filtroTexto]);
+
+  // ---------- KPIs globales ----------
+  const kpis = useMemo(() => {
+    const totalEnviados = resumen.reduce((acc, r) => acc + (r.enviados || 0), 0);
+    const totalConfirmados = resumen.reduce((acc, r) => acc + (r.confirmados || 0), 0);
+    const totalPendientes = detalle.filter((f) => f.estado === "preview").length;
+    const tasaConfirmacion = totalEnviados > 0 ? Math.round((totalConfirmados / totalEnviados) * 100) : 0;
+    const usuariosActivos = resumen.length;
+    return { totalEnviados, totalConfirmados, totalPendientes, tasaConfirmacion, usuariosActivos };
+  }, [resumen, detalle]);
+
+  // ---------- Datos para el gráfico de barras (enviados / pendientes / confirmados por usuario) ----------
+  const datosBarras = useMemo(
+    () =>
+      resumenConPendientes.map((r) => ({
+        usuario: r.usuario.split(" ")[0],
+        Enviados: r.enviados,
+        Pendientes: r.pendientes,
+        Confirmados: r.confirmados,
+      })),
+    [resumenConPendientes]
+  );
+
+  // ---------- Datos para la dona (distribución por estado) ----------
+  const datosEstado = useMemo(() => {
+    const conteo: Record<string, number> = { preview: 0, confirmado: 0, subido: 0 };
+    for (const f of detalle) {
+      if (conteo[f.estado] !== undefined) conteo[f.estado] += 1;
+    }
+    return Object.entries(conteo)
+      .filter(([, valor]) => valor > 0)
+      .map(([estado, valor]) => ({ name: estado, value: valor }));
+  }, [detalle]);
+
+  return (
+    <div>
+
+     {error && (
+        <div className="mb-6 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
+          <AlertTriangle size={15} />
+          {error}
         </div>
+      )}
 
-        {error && (
-          <div className="mb-6 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
-            <AlertTriangle size={15} />
-            {error}
+      {/* ================= KPIs GLOBALES ================= */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+        <KpiCard icon={Send} color="amber" label="Total enviados" valor={kpis.totalEnviados} />
+        <KpiCard icon={Clock} color="orange" label="Pendientes de confirmar" valor={kpis.totalPendientes} />
+        <KpiCard icon={CheckCircle2} color="indigo" label="Total confirmados" valor={kpis.totalConfirmados} />
+        <KpiCard icon={Percent} color="emerald" label="Tasa de confirmación" valor={`${kpis.tasaConfirmacion}%`} />
+        <KpiCard icon={User} color="slate" label="Usuarios activos" valor={kpis.usuariosActivos} />
+      </div>
+
+      {/* ================= GRÁFICOS ================= */}
+      {resumen.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-4">
+            <p className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-1.5">
+              <BarChart3 size={13} className="text-[#4F46E5]" /> Enviados · Pendientes · Confirmados por usuario
+            </p>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={datosBarras} margin={{ top: 20, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="usuario" tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="Enviados" fill="#f59e0b" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="Enviados" position="top" style={{ fontSize: 10, fill: "#b45309", fontWeight: 600 }} />
+                </Bar>
+                <Bar dataKey="Pendientes" fill="#fb923c" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="Pendientes" position="top" style={{ fontSize: 10, fill: "#c2410c", fontWeight: 600 }} />
+                </Bar>
+                <Bar dataKey="Confirmados" fill="#4F46E5" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="Confirmados" position="top" style={{ fontSize: 10, fill: "#4338ca", fontWeight: 600 }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-        )}
 
-        {/* Resumen por usuario */}
-        {resumen.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-            {resumen.map((r) => (
+          <div className="bg-white border border-slate-200 rounded-xl p-4">
+            <p className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-1.5">
+              <PieChart size={13} className="text-[#4F46E5]" /> Distribución por estado
+            </p>
+            {datosEstado.length === 0 ? (
+              <p className="text-xs text-slate-400 py-14 text-center">Sin datos aún</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={240}>
+                <RePieChart>
+                  <Pie
+                    data={datosEstado}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={48}
+                    outerRadius={78}
+                    cornerRadius={8}
+                    paddingAngle={4}
+                    label={(props: any) => `${Math.round((props.percent || 0) * 100)}%`}
+                    labelLine={false}
+                  >
+                    {datosEstado.map((d, i) => (
+                      <Cell key={i} fill={COLORES_ESTADO[d.name] || "#94a3b8"} stroke="#fff" strokeWidth={2} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                    formatter={(value: any, name: any) => [
+                      `${value} (${detalle.length > 0 ? Math.round((Number(value) / detalle.length) * 100) : 0}%)`,
+                      String(name),
+                    ]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </RePieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= RESUMEN POR USUARIO ================= */}
+      {resumenConPendientes.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3 mb-6">
+          {resumenConPendientes.map((r) => {
+            const foto = buscarFotoPorNombre(usuariosChatMap, r.usuario);
+            const activo = filtroUsuario === r.usuario;
+            const progreso = r.enviados > 0 ? Math.round((r.confirmados / r.enviados) * 100) : 0;
+            return (
               <button
                 key={r.usuario}
                 onClick={() => setFiltroUsuario((prev) => (prev === r.usuario ? "" : r.usuario))}
-                className={`text-left bg-white border rounded-xl p-4 transition-colors ${
-                  filtroUsuario === r.usuario
-                    ? "border-indigo-300 ring-2 ring-indigo-500/10"
-                    : "border-slate-200 hover:border-slate-300"
+                className={`text-left bg-white border rounded-xl p-4 transition-all ${
+                  activo
+                    ? "border-indigo-300 ring-2 ring-indigo-500/10 shadow-sm"
+                    : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
                 }`}
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-7 h-7 rounded-full bg-indigo-50 flex items-center justify-center shrink-0">
-                    <User size={13} className="text-[#4F46E5]" />
+                <div className="flex items-center gap-2.5 mb-3">
+                  <div className="w-10 h-10 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0 overflow-hidden">
+                    <AvatarToastChat nombre={r.usuario} foto={foto} tamano={40} />
                   </div>
-                  <span className="text-sm font-semibold text-slate-800 truncate">{r.usuario}</span>
+                  <span className="text-xs font-semibold text-slate-800 truncate">{r.usuario}</span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-amber-700">{r.enviados} enviado{r.enviados !== 1 ? "s" : ""}</span>
-                  <span className="text-[#4F46E5]">{r.confirmados} confirmado{r.confirmados !== 1 ? "s" : ""}</span>
+
+                <div className="grid grid-cols-3 gap-1.5 mb-2.5">
+                  <div className="text-center bg-amber-50 rounded-lg py-1.5">
+                    <p className="text-sm font-bold text-amber-700 leading-none">{r.enviados}</p>
+                    <p className="text-[9px] text-amber-600 mt-1">Enviados</p>
+                  </div>
+                  <div className="text-center bg-orange-50 rounded-lg py-1.5">
+                    <p className="text-sm font-bold text-orange-700 leading-none">{r.pendientes}</p>
+                    <p className="text-[9px] text-orange-600 mt-1">Pendientes</p>
+                  </div>
+                  <div className="text-center bg-indigo-50 rounded-lg py-1.5">
+                    <p className="text-sm font-bold text-[#4F46E5] leading-none">{r.confirmados}</p>
+                    <p className="text-[9px] text-indigo-500 mt-1">Confirmados</p>
+                  </div>
                 </div>
+
+                <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div className="h-full bg-[#4F46E5] rounded-full transition-all" style={{ width: `${progreso}%` }} />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">{progreso}% confirmado</p>
               </button>
-            ))}
-          </div>
-        )}
-
-        {/* Filtros */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-          <input
-            placeholder="Buscar (código, orden, producto...)"
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            className="bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
-          />
-          <select
-            value={filtroUsuario}
-            onChange={(e) => setFiltroUsuario(e.target.value)}
-            className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-          >
-            <option value="">Todos los usuarios</option>
-            {usuariosDisponibles.map((u) => (
-              <option key={u} value={u}>{u}</option>
-            ))}
-          </select>
-          <select
-            value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value)}
-            className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-          >
-            <option value="">Todos los estados</option>
-            <option value="preview">En preview</option>
-            <option value="confirmado">Confirmado</option>
-            <option value="subido">Subido al ERP</option>
-          </select>
+            );
+          })}
         </div>
-
-        {cargando && detalle.length === 0 ? (
-          <div className="flex items-center gap-2 text-sm text-slate-500 py-10 justify-center">
-            <Loader2 size={15} className="animate-spin" /> Cargando auditoría…
-          </div>
-        ) : filasFiltradas.length === 0 ? (
-          <EmptyState
-            icon={BarChart3}
-            titulo="Sin movimientos"
-            detalle="Todavía no hay productos enviados a revisión ni confirmados con los filtros actuales."
-          />
-        ) : (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden overflow-x-auto">
-            <table className="w-full text-sm min-w-[900px]">
-              <thead>
-                <tr
-                  style={{ fontFamily: "var(--font-mono)" }}
-                  className="border-b border-slate-200 bg-slate-50 text-left text-[11px] text-slate-500 uppercase tracking-wide"
-                >
-                  <th className="px-4 py-3 font-medium">Orden / OCAM</th>
-                  <th className="px-4 py-3 font-medium">Producto</th>
-                  <th className="px-4 py-3 font-medium">Estado</th>
-                  <th className="px-4 py-3 font-medium">Enviado por</th>
-                  <th className="px-4 py-3 font-medium">Fecha envío</th>
-                  <th className="px-4 py-3 font-medium">Confirmado por</th>
-                  <th className="px-4 py-3 font-medium">Fecha confirmación</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filasFiltradas.map((f, i) => (
-                  <tr key={`${f.orden_compra_id}-${f.producto_codigo}-${i}`} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/70">
-                    <td className="px-4 py-3">
-                      <p style={{ fontFamily: "var(--font-mono)" }} className="text-xs font-semibold text-slate-800">
-                        {f.codigo_venta || f.numero_ocam || `#${f.orden_compra_id}`}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="text-xs font-medium text-slate-800">{f.producto_codigo}</p>
-                      {f.producto_descripcion && (
-                        <p className="text-[11px] text-slate-400 truncate max-w-[220px]">{f.producto_descripcion}</p>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${badgeEstadoAuditoria(f.estado)}`}>
-                        {f.estado}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-700">{f.rellenado_por || "—"}</td>
-                    <td style={{ fontFamily: "var(--font-mono)" }} className="px-4 py-3 text-[11px] text-slate-500">
-                      {formatearFechaHora(f.rellenado_en)}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-700">{f.confirmado_por || "—"}</td>
-                    <td style={{ fontFamily: "var(--font-mono)" }} className="px-4 py-3 text-[11px] text-slate-500">
-                      {formatearFechaHora(f.confirmado_en)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      )}
+      {/* Filtros */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <input
+          placeholder="Buscar (código, orden, producto...)"
+          value={filtroTexto}
+          onChange={(e) => setFiltroTexto(e.target.value)}
+          className="bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
+        />
+        <select
+          value={filtroUsuario}
+          onChange={(e) => setFiltroUsuario(e.target.value)}
+          className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+        >
+          <option value="">Todos los usuarios</option>
+          {usuariosDisponibles.map((u) => (
+            <option key={u} value={u}>{u}</option>
+          ))}
+        </select>
+        <select
+          value={filtroEstado}
+          onChange={(e) => setFiltroEstado(e.target.value)}
+          className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+        >
+          <option value="">Todos los estados</option>
+          <option value="preview">En preview</option>
+          <option value="confirmado">Confirmado</option>
+          <option value="subido">Subido al ERP</option>
+        </select>
       </div>
-    );
-  }
+
+      {cargando && detalle.length === 0 ? (
+        <div className="flex items-center gap-2 text-sm text-slate-500 py-10 justify-center">
+          <Loader2 size={15} className="animate-spin" /> Cargando auditoría…
+        </div>
+      ) : filasFiltradas.length === 0 ? (
+        <EmptyState
+          icon={BarChart3}
+          titulo="Sin movimientos"
+          detalle="Todavía no hay productos enviados a revisión ni confirmados con los filtros actuales."
+        />
+      ) : (
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden overflow-x-auto">
+          <table className="w-full text-sm min-w-[900px]">
+            <thead>
+              <tr
+                style={{ fontFamily: "var(--font-mono)" }}
+                className="border-b border-slate-200 bg-slate-50 text-left text-[11px] text-slate-500 uppercase tracking-wide"
+              >
+                <th className="px-4 py-3 font-medium">Orden / OCAM</th>
+                <th className="px-4 py-3 font-medium">Producto</th>
+                <th className="px-4 py-3 font-medium">Estado</th>
+                <th className="px-4 py-3 font-medium">Enviado por</th>
+                <th className="px-4 py-3 font-medium">Fecha envío</th>
+                <th className="px-4 py-3 font-medium">Confirmado por</th>
+                <th className="px-4 py-3 font-medium">Fecha confirmación</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filasFiltradas.map((f, i) => {
+                const claveFila = `${f.orden_compra_id}:${f.producto_codigo}`;
+                const estaCargando = filaCargando === claveFila;
+                const hayOtraCargando = !!filaCargando && !estaCargando;
+                return (
+                <tr
+                  key={`${f.orden_compra_id}-${f.producto_codigo}-${i}`}
+                  onClick={() => {
+                    if (filaCargando) return; // ya hay una fila abriéndose
+                    onAbrirProducto?.(f.orden_compra_id, f.producto_codigo);
+                  }}
+                  title={estaCargando ? "Abriendo…" : "Clic para abrir este producto en Operaciones"}
+                  className={`border-b border-slate-100 last:border-0 transition-colors ${
+                    estaCargando
+                      ? "bg-indigo-50/80 cursor-wait"
+                      : hayOtraCargando
+                      ? "opacity-50 cursor-not-allowed"
+                      : "hover:bg-indigo-50/60 cursor-pointer"
+                  }`}
+                >
+                  <td className="px-4 py-3">
+                    <p style={{ fontFamily: "var(--font-mono)" }} className="text-xs font-semibold text-slate-800">
+                      {f.codigo_venta || f.numero_ocam || `#${f.orden_compra_id}`}
+                    </p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="text-xs font-medium text-slate-800">{f.producto_codigo}</p>
+                    {f.producto_descripcion && (
+                      <p className="text-[11px] text-slate-400 truncate max-w-[220px]">{f.producto_descripcion}</p>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${badgeEstadoAuditoria(f.estado)}`}>
+                      {f.estado}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {f.rellenado_por ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-6 h-6 rounded-full overflow-hidden shrink-0 border border-slate-200">
+                          <AvatarToastChat
+                            nombre={f.rellenado_por}
+                            foto={buscarFotoPorNombre(usuariosChatMap, f.rellenado_por)}
+                            tamano={24}
+                          />
+                        </div>
+                        <span className="text-xs text-slate-700 truncate">{f.rellenado_por}</span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-700">—</span>
+                    )}
+                  </td>
+                  <td style={{ fontFamily: "var(--font-mono)" }} className="px-4 py-3 text-[11px] text-slate-500">
+                    {formatearFechaHora(f.rellenado_en)}
+                  </td>
+                  <td className="px-4 py-3">
+                    {f.confirmado_por ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-6 h-6 rounded-full overflow-hidden shrink-0 border border-slate-200">
+                          <AvatarToastChat
+                            nombre={f.confirmado_por}
+                            foto={buscarFotoPorNombre(usuariosChatMap, f.confirmado_por)}
+                            tamano={24}
+                          />
+                        </div>
+                        <span className="text-xs text-slate-700 truncate">{f.confirmado_por}</span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-700">—</span>
+                    )}
+                  </td>
+                  <td style={{ fontFamily: "var(--font-mono)" }} className="px-4 py-3 text-[11px] text-slate-500">
+                    {estaCargando ? (
+                      <span className="inline-flex items-center gap-1.5 text-[#4F46E5] font-medium">
+                        <Loader2 size={12} className="animate-spin" /> Abriendo…
+                      </span>
+                    ) : (
+                      formatearFechaHora(f.confirmado_en)
+                    )}
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}

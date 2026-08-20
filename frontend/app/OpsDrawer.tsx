@@ -2785,9 +2785,11 @@ return (
               procesando={procesando}
               actualizarItem={actualizarItem}
               compartido={{
+                proveedor_id: compartido.proveedor_id,
                 proveedor_nombre: compartido.proveedor_nombre,
                 proveedor_telefono: compartido.proveedor_telefono,
                 tipo_envio: compartido.tipo_envio,
+                transporte_id: compartido.transporte_id,
                 agencia_transporte: compartido.agencia_transporte,
                 observaciones: compartido.observaciones,
                 otras_observaciones: compartido.otras_observaciones,
@@ -2858,8 +2860,11 @@ return (
               cantidadImagenes={(codigo) => (imagenesPorProducto[codigo] || []).length}
               urlOce={venta.documentoOce}
               urlOcf={venta.documentoOcf}
+              clienteId={(venta as any).cliente?.id}
+              departamentoEntrega={(venta as any).cliente?.departamento}
+              provinciaEntrega={(venta as any).cliente?.provincia}
+              distritoEntrega={(venta as any).cliente?.distrito}
             />
-
           {faltantes.length > 0 && modo !== "ver" && (
             <p className="text-[11px] text-amber-600 flex items-start gap-1">
               <AlertTriangle size={11} className="mt-0.5 shrink-0" /> Faltan: {faltantes.join(", ")}
@@ -3277,16 +3282,27 @@ function FormularioCrearProveedor({
   mostrarToast: (tipo: "success" | "error", mensaje: string) => void;  // <-- AGREGAR
 }) {
 
-  const [productoAbierto, setProductoAbierto] = useState<string | null>(productoInicial ?? null);
+  // Si el producto viene acompañado de grupoInicial, significa que
+  // pertenece a un envío en BLOQUE — en ese caso NO debe abrirse la
+  // tarjeta individual (eso lo maneja el efecto de grupoInicial más
+  // abajo, que abre PanelEnvioBloque). Si abrimos ambos a la vez, quedan
+  // en conflicto: se ve el modal de bloque encima, pero por debajo la
+  // tarjeta individual también quedó "abierta", causando el formulario
+  // incorrecto al cerrar o al reabrir.
+  const [productoAbierto, setProductoAbierto] = useState<string | null>(
+    grupoInicial ? null : (productoInicial ?? null)
+  );
 
-  // Si nos llega un producto a abrir (ej. desde una notificación), lo
-  // expandimos apenas se monte o cambie, sin esperar a que el usuario
-  // haga clic en la tarjeta del producto.
+  // Si nos llega un producto a abrir (ej. desde Auditoría o una
+  // notificación) y NO pertenece a un bloque, lo expandimos apenas se
+  // monte o cambie, sin esperar a que el usuario haga clic en la
+  // tarjeta. Si SÍ pertenece a un bloque (grupoInicial presente), se
+  // deja que el otro efecto abra el panel de bloque en su lugar.
   useEffect(() => {
-    if (productoInicial) {
+    if (productoInicial && !grupoInicial) {
       setProductoAbierto(productoInicial);
     }
-  }, [productoInicial]);
+  }, [productoInicial, grupoInicial]);
 
   const [forms, setForms] = useState<Record<string, FormularioProducto>>({});
 
@@ -4258,8 +4274,36 @@ return (
         const opReal = opRealDelGrupo(codigosGrupo, ops);
         const empresaRealId = opReal ? String(opReal.empresaId ?? "") : "";
 
+        // Si el bloque se abrió desde Auditoría/notificación y todavía no
+        // llegaron sus seguimientos (fetch en curso), no montamos el modal
+        // con datos vacíos — esperamos a que cargarSeguimientos() traiga
+        // el bloque real (el useEffect de reintento cada 800ms ya se
+        // encarga de eso). Evita el destello de "Bloque confirmado — 0
+        // productos" que se veía antes de que llegara la data.
+        if (productosDelGrupo.length === 0) {
+          return (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => { setGrupoBloqueAbierto(null); setProductoBloqueDestacado(null); }} />
+              <div className="relative bg-white rounded-2xl shadow-2xl px-8 py-6 flex items-center gap-3">
+                <Loader2 size={18} className="animate-spin text-[#4F46E5]" />
+                <p className="text-sm text-slate-600">Cargando datos del bloque…</p>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <PanelEnvioBloque
+            // key con la cantidad de productos del grupo: mientras
+            // seguimientos no haya cargado los datos reales del bloque,
+            // productosDelGrupo.length es 0 y el modal nace vacío (useState
+            // solo lee el valor inicial una vez). En cuanto cargarSeguimientos()
+            // trae los datos reales, este key cambia (0 -> N) y React
+            // DESMONTA y VUELVE A MONTAR PanelEnvioBloque desde cero, esta
+            // vez con seguimientosGrupo ya lleno — así items/compartido se
+            // inicializan con los datos correctos en vez de quedar
+            // congelados en vacío para siempre.
+            key={`${grupoBloqueAbierto}-${productosDelGrupo.length}`}
             modo={modoModal}
             venta={venta}
             codigosSeleccionados={[]}
@@ -4637,6 +4681,10 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                 onCambiarImagenes={(nuevas) => setImagenesPorProducto((prev) => ({ ...prev, [codigo]: nuevas }))}
                 urlOce={venta.documentoOce}
                 urlOcf={venta.documentoOcf}
+                clienteId={(venta as any).cliente?.id}
+                departamentoEntrega={(venta as any).cliente?.departamento}
+                provinciaEntrega={(venta as any).cliente?.provincia}
+                distritoEntrega={(venta as any).cliente?.distrito}
                 estado={(seg.estado as "pendiente" | "preview" | "confirmado" | "subido") || "pendiente"}
                 rellenadoPor={seg.rellenado_por}
                 confirmadoPor={seg.confirmado_por}

@@ -11,15 +11,19 @@ import json
 import pymysql
 from dbutils.pooled_db import PooledDB
 
+
+from dotenv import load_dotenv
+load_dotenv()
+
 DB_CONFIG = dict(
-    host=os.getenv("DB_HOST", "2.24.120.69"),
-    user=os.getenv("DB_USER", "mysql"),
+    host=os.environ["DB_HOST"],
+    port=int(os.environ["DB_PORT"]),
+    user=os.environ["DB_USER"],
     password=os.environ["DB_PASSWORD"],
-    database=os.getenv("DB_NAME", "helbot_db"),
+    database=os.environ["DB_NAME"],
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
 )
-
 pool = PooledDB(
     creator=pymysql,
     maxconnections=20,

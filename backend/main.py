@@ -81,6 +81,9 @@ from routers import perucompras_marcas_router as perucompras_marcas_router_mod
 from routers import perucompras_stock_router as perucompras_stock_router_mod
 from routers import perucompras_plazo_router as perucompras_plazo_router_mod
 
+
+from routers import historial_comercial as historial_comercial_mod
+
 from chat import router as chat_router
 
 logger = logging.getLogger("helbot.main")
@@ -154,6 +157,9 @@ app.include_router(perucompras_marcas_router_mod.router)
 
 app.include_router(perucompras_stock_router_mod.router)
 app.include_router(perucompras_plazo_router_mod.router)
+
+
+app.include_router(historial_comercial_mod.router)
 
 app.include_router(chat_router)
 

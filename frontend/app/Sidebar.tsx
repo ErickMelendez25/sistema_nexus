@@ -157,9 +157,9 @@ export default function Sidebar({
   );
 
 const esCobranzas = rol === "cobranzas";
-  const esAdmin = rol === "admin";
-  const esPracticante = rol === "practicante";
-
+const esAdmin = rol === "admin";
+const esPracticante = rol === "practicante";
+const esSeguimiento = rol === "seguimiento";
 
   const iniciales =
     nombreUsuario
@@ -466,7 +466,7 @@ const esCobranzas = rol === "cobranzas";
 
         {/* Grupo: Equipo Ventas (Operaciones / Big Data) — fijo, visible
             para cualquier rol, igual que el grupo Cobranzas de arriba. */}
-      {!esCobranzas && (
+      {!esCobranzas && !esSeguimiento && ( 
       <div className="pt-1">
           <button
             onClick={() => setEquipoVentasAbierto((v) => !v)}
