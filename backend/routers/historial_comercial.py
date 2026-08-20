@@ -41,8 +41,11 @@ def _resumen_de(registros: list[dict]) -> dict:
             "ultimo": None,
             "operaciones": 0,
             "ultimaFecha": None,
+            "cantidadTotal": None,
+            "ultimaCantidad": None,
         }
     precios = [float(r["precio"]) for r in registros]
+    cantidades = [r.get("cantidad") for r in registros if r.get("cantidad") is not None]
     # registros ya viene ordenado por fecha_operacion DESC
     return {
         "minimo": min(precios),
@@ -51,6 +54,8 @@ def _resumen_de(registros: list[dict]) -> dict:
         "ultimo": precios[0],
         "operaciones": len(registros),
         "ultimaFecha": registros[0]["fecha"],
+        "cantidadTotal": sum(cantidades) if cantidades else None,
+        "ultimaCantidad": registros[0].get("cantidad"),
     }
 
 
@@ -69,6 +74,10 @@ def _por_cliente_de(pool_rows: list[dict]) -> list[dict]:
                 "clienteId": cid,
                 "clienteNombre": r.get("cliente_nombre") or f"Cliente #{cid}",
                 "ultimoPrecio": float(r["precio"]),
+                "ultimaCantidad": r.get("cantidad"),
+                "ultimaFecha": r["fecha"],
+                "codigoVenta": r.get("codigo_venta"),
+                "codigoOp": r.get("codigo_op"),
                 "operaciones": 0,
             }
         por_cliente[cid]["operaciones"] += 1
@@ -78,6 +87,46 @@ def _por_cliente_de(pool_rows: list[dict]) -> list[dict]:
     lista = list(por_cliente.values())
     lista.sort(key=lambda x: x["operaciones"], reverse=True)
     return lista
+
+
+
+
+
+def _por_ubicacion_de(pool_rows: list[dict]) -> list[dict]:
+    """Agrupa por combinación única de departamento/provincia/distrito:
+    cantidad de operaciones, último precio y última fecha en esa zona.
+    Usa el pool completo (no el subset filtrado) para que el ejecutivo
+    vea TODAS las zonas donde hay historial de este producto/transporte,
+    no solo la ubicación que está consultando ahora mismo."""
+    por_ubi: dict[tuple, dict] = {}
+    for r in pool_rows:
+        depto = (r.get("departamento") or "").strip().upper()
+        prov = (r.get("provincia") or "").strip().upper()
+        dist = (r.get("distrito") or "").strip().upper()
+        if not depto and not prov and not dist:
+            continue  # sin ubicación registrada, no aporta al desglose
+        key = (depto, prov, dist)
+        if key not in por_ubi:
+            por_ubi[key] = {
+                "departamento": r.get("departamento"),
+                "provincia": r.get("provincia"),
+                "distrito": r.get("distrito"),
+                "ultimoPrecio": float(r["precio"]),
+                "ultimaCantidad": r.get("cantidad"),
+                "ultimaFecha": r["fecha"],
+                "codigoVenta": r.get("codigo_venta"),
+                "codigoOp": r.get("codigo_op"),
+                "operaciones": 0,
+            }
+        por_ubi[key]["operaciones"] += 1
+        # pool_rows viene ordenado DESC por fecha, el primero por key
+        # ya es el más reciente de esa ubicación.
+
+    lista = list(por_ubi.values())
+    lista.sort(key=lambda x: x["operaciones"], reverse=True)
+    return lista
+
+
 
 
 def _coincide_ubicacion(r, departamento, provincia, distrito):
@@ -113,6 +162,7 @@ def _armar_respuesta(pool_rows: list[dict], clienteId, departamento, provincia, 
     historial = [
         {
             "precio": r["precio"],
+            "cantidad": r.get("cantidad"),
             "fecha": r["fecha"],
             "proveedorId": r.get("proveedor_id"),
             "proveedorNombre": r.get("proveedor_nombre"),
@@ -120,15 +170,17 @@ def _armar_respuesta(pool_rows: list[dict], clienteId, departamento, provincia, 
             "transporteNombre": r.get("transporte_nombre"),
             "clienteNombre": r.get("cliente_nombre"),
             "ubicacion": ", ".join(filter(None, [r.get("distrito"), r.get("provincia"), r.get("departamento")])),
+            "codigoVenta": r.get("codigo_venta"),
+            "codigoOp": r.get("codigo_op"),
         }
         for r in seleccion[:10]
     ]
-
     return {
         "resumen": _resumen_de(seleccion),
         "coincidencia": coincidencia,
         "historial": historial,
         "porCliente": _por_cliente_de(pool_rows),
+        "porUbicacion": _por_ubicacion_de(pool_rows),
     }
 
 
@@ -151,12 +203,15 @@ def historial_precios_proveedor(
                 h.proveedor_id     AS proveedor_id,
                 pv.razon_social    AS proveedor_nombre,
                 h.precio_unitario  AS precio,
+                h.cantidad         AS cantidad,
                 h.fecha_operacion  AS fecha,
                 h.cliente_id       AS cliente_id,
                 cl.razon_social    AS cliente_nombre,
                 h.departamento     AS departamento,
                 h.provincia        AS provincia,
-                h.distrito         AS distrito
+                h.distrito         AS distrito,
+                h.codigo_venta     AS codigo_venta,
+                h.codigo_op        AS codigo_op
             FROM historial_precios_proveedor h
             LEFT JOIN clientes_cache cl ON cl.id = h.cliente_id
             LEFT JOIN proveedores_cache pv ON pv.id = h.proveedor_id
@@ -169,6 +224,7 @@ def historial_precios_proveedor(
 
         for r in pool_rows:
             r["precio"] = float(r["precio"])
+            r["cantidad"] = float(r["cantidad"]) if r.get("cantidad") is not None else None
             r["fecha"] = r["fecha"].isoformat() if r["fecha"] else None
 
         return _armar_respuesta(pool_rows, clienteId, departamento, provincia, distrito)
@@ -197,29 +253,128 @@ def historial_precios_flete(
                 h.transporte_id    AS transporte_id,
                 tr.razon_social    AS transporte_nombre,
                 h.precio_flete     AS precio,
+                h.cantidad_total   AS cantidad,
                 h.fecha_operacion  AS fecha,
                 h.cliente_id       AS cliente_id,
                 cl.razon_social    AS cliente_nombre,
                 h.departamento     AS departamento,
                 h.provincia        AS provincia,
-                h.distrito         AS distrito
+                h.distrito         AS distrito,
+                h.codigo_venta     AS codigo_venta,
+                h.codigo_op        AS codigo_op
             FROM historial_precios_flete h
             LEFT JOIN clientes_cache cl ON cl.id = h.cliente_id
             LEFT JOIN transportes_cache tr ON tr.id = h.transporte_id
             WHERE h.transporte_id = %s
             ORDER BY h.fecha_operacion DESC, h.fecha_registro DESC
         """
+        
         with conn.cursor() as cur:
             cur.execute(sql, (transporteId,))
             pool_rows = cur.fetchall()
 
         for r in pool_rows:
             r["precio"] = float(r["precio"])
+            r["cantidad"] = float(r["cantidad"]) if r.get("cantidad") is not None else None
             r["fecha"] = r["fecha"].isoformat() if r["fecha"] else None
 
         return _armar_respuesta(pool_rows, clienteId, departamento, provincia, distrito)
     except Exception:
         logger.exception("Error consultando historial de precios de flete")
+        raise
+    finally:
+        conn.close()
+
+
+
+
+# ============================================================
+# GET /api/historial-comercial/fletes/por-destino
+# Uso: el ejecutivo aún no sabe qué transportista usar, solo
+# conoce el destino. Devuelve TODOS los transportistas que
+# tienen historial hacia ese destino, con su resumen de precio,
+# para que el usuario elija con quién comparar/negociar.
+# ============================================================
+@router.get("/fletes/por-destino")
+def historial_fletes_por_destino(
+    departamento: Optional[str] = Query(None),
+    provincia: Optional[str] = Query(None),
+    distrito: Optional[str] = Query(None),
+):
+    if not (departamento or provincia or distrito):
+        return {"transportistas": []}
+
+    conn = get_conn()
+    try:
+        sql = """
+            SELECT
+                h.transporte_id    AS transporte_id,
+                tr.razon_social    AS transporte_nombre,
+                h.precio_flete     AS precio,
+                h.cantidad_total   AS cantidad,
+                h.fecha_operacion  AS fecha,
+                h.cliente_id       AS cliente_id,
+                cl.razon_social    AS cliente_nombre,
+                h.departamento     AS departamento,
+                h.provincia        AS provincia,
+                h.distrito         AS distrito,
+                h.codigo_venta     AS codigo_venta,
+                h.codigo_op        AS codigo_op
+            FROM historial_precios_flete h
+            LEFT JOIN clientes_cache cl ON cl.id = h.cliente_id
+            LEFT JOIN transportes_cache tr ON tr.id = h.transporte_id
+            WHERE 1=1
+        """
+        params = []
+        if departamento:
+            sql += " AND UPPER(h.departamento) = UPPER(%s)"
+            params.append(departamento)
+        if provincia:
+            sql += " AND UPPER(h.provincia) = UPPER(%s)"
+            params.append(provincia)
+        if distrito:
+            sql += " AND UPPER(h.distrito) = UPPER(%s)"
+            params.append(distrito)
+        sql += " ORDER BY h.fecha_operacion DESC, h.fecha_registro DESC"
+
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            filas = cur.fetchall()
+
+        for r in filas:
+            r["precio"] = float(r["precio"])
+            r["cantidad"] = float(r["cantidad"]) if r.get("cantidad") is not None else None
+            r["fecha"] = r["fecha"].isoformat() if r["fecha"] else None
+
+        # Agrupar por transportista: resumen + últimas operaciones
+        agrupado: dict[int, list[dict]] = {}
+        for r in filas:
+            tid = r.get("transporte_id")
+            agrupado.setdefault(tid, []).append(r)
+
+        transportistas = []
+        for tid, regs in agrupado.items():
+            transportistas.append({
+                "transporteId": tid,
+                "transporteNombre": regs[0].get("transporte_nombre"),
+                "resumen": _resumen_de(regs),
+                "historial": [
+                    {
+                        "precio": r["precio"],
+                        "cantidad": r.get("cantidad"),
+                        "fecha": r["fecha"],
+                        "clienteNombre": r.get("cliente_nombre"),
+                        "codigoVenta": r.get("codigo_venta"),
+                        "codigoOp": r.get("codigo_op"),
+                    }
+                    for r in regs[:5]
+                ],
+            })
+
+        transportistas.sort(key=lambda t: t["resumen"]["operaciones"], reverse=True)
+        return {"transportistas": transportistas}
+    except Exception:
+        logger.exception("Error consultando historial de fletes por destino")
         raise
     finally:
         conn.close()

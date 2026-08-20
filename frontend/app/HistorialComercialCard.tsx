@@ -20,21 +20,42 @@ interface ResumenComercial {
   ultimo: number | null;
   operaciones: number;
   ultimaFecha: string | null;
+  cantidadTotal: number | null;
+  ultimaCantidad: number | null;
 }
 
 interface RegistroReciente {
   precio: number;
+  cantidad?: number | null;
   fecha: string;
   proveedorId?: number | null;
   clienteNombre?: string | null;
   ubicacion?: string | null;
+  codigoVenta?: string | null;
+  codigoOp?: string | null;
 }
 
 interface PorCliente {
   clienteId: number;
   clienteNombre: string;
   ultimoPrecio: number;
+  ultimaCantidad?: number | null;
+  ultimaFecha?: string | null;
   operaciones: number;
+  codigoVenta?: string | null;
+  codigoOp?: string | null;
+}
+
+interface PorUbicacion {
+  departamento: string | null;
+  provincia: string | null;
+  distrito: string | null;
+  ultimoPrecio: number;
+  ultimaCantidad?: number | null;
+  operaciones: number;
+  ultimaFecha: string | null;
+  codigoVenta?: string | null;
+  codigoOp?: string | null;
 }
 
 interface RespuestaHistorial {
@@ -42,17 +63,18 @@ interface RespuestaHistorial {
   coincidencia: "exacta" | "aproximada" | "solo_entidad" | "sin_historial";
   historial: RegistroReciente[];
   porCliente?: PorCliente[];
+  porUbicacion?: PorUbicacion[];
 }
 
 /* ============================================================
    Etiquetas de nivel de coincidencia — nunca mostrar un promedio
    general como si fuera específico del destino/cliente.
    ============================================================ */
-const ETIQUETA_COINCIDENCIA: Record<RespuestaHistorial["coincidencia"], string> = {
-  exacta: "Coincidencia exacta",
-  aproximada: "Referencia por ubicación",
-  solo_entidad: "Referencia general (sin ubicación)",
-  sin_historial: "Sin historial",
+const INFO_COINCIDENCIA: Record<RespuestaHistorial["coincidencia"], { label: string; desc: string }> = {
+  exacta: { label: "Coincidencia exacta", desc: "Mismo cliente y mismo destino de entrega" },
+  aproximada: { label: "Referencia por ubicación", desc: "Mismo destino de entrega, con otro cliente" },
+  solo_entidad: { label: "Referencia general", desc: "Sin historial en este destino — se muestra el histórico de todas las zonas" },
+  sin_historial: { label: "Sin historial", desc: "" },
 };
 
 /* ============================================================
@@ -114,6 +136,9 @@ export function HistorialPrecioProveedor({
       titulo="Historial de precios — todos los proveedores"
       nombreEntidad={null}
       ubicacion={[distrito, provincia, departamento].filter(Boolean).join(" / ")}
+      departamento={departamento}
+      provincia={provincia}
+      distrito={distrito}
       cargando={cargando}
       data={data}
       etiquetaColumna="Precio"
@@ -180,6 +205,9 @@ export function HistorialPrecioFlete({
       titulo="Historial de fletes"
       nombreEntidad={transporteNombre}
       ubicacion={[distrito, provincia, departamento].filter(Boolean).join(" / ")}
+      departamento={departamento}
+      provincia={provincia}
+      distrito={distrito}
       cargando={cargando}
       data={data}
       etiquetaColumna="Flete"
@@ -195,6 +223,9 @@ function TarjetaHistorial({
   titulo,
   nombreEntidad,
   ubicacion,
+  departamento,
+  provincia,
+  distrito,
   cargando,
   data,
   etiquetaColumna,
@@ -205,6 +236,9 @@ function TarjetaHistorial({
   titulo: string;
   nombreEntidad?: string | null;
   ubicacion?: string;
+  departamento?: string | null;
+  provincia?: string | null;
+  distrito?: string | null;
   cargando: boolean;
   data: RespuestaHistorial | null;
   etiquetaColumna: string;
@@ -240,10 +274,10 @@ function TarjetaHistorial({
 
   const chipEstilo =
     data?.coincidencia === "exacta"
-      ? estilos.chipExacta
+      ? "bg-slate-900 text-white border-slate-900"
       : data?.coincidencia === "aproximada"
-      ? estilos.chipAprox
-      : estilos.chipEntidad;
+      ? "bg-slate-100 text-slate-700 border-slate-300"
+      : "bg-slate-50 text-slate-500 border-slate-200";
 
   const iniciales = (nombre?: string | null) =>
     (nombre || "?")
@@ -291,19 +325,26 @@ function TarjetaHistorial({
 
         {!sinHistorial && data && (
           <>
-            {/* Chip de nivel de confianza */}
-            <div
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold ${chipEstilo}`}
-            >
-              {data.coincidencia === "exacta" ? <ShieldCheck size={11} /> : <ShieldAlert size={11} />}
-              {ETIQUETA_COINCIDENCIA[data.coincidencia]}
-              <span className="opacity-60">·</span>
-              {data.resumen.operaciones} operación{data.resumen.operaciones === 1 ? "" : "es"}
+            {/* Nivel de confianza del dato — con explicación siempre visible */}
+            <div className={`rounded-lg border px-3 py-2 ${chipEstilo}`}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                {data.coincidencia === "exacta" ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+                {INFO_COINCIDENCIA[data.coincidencia].label}
+                <span className="opacity-50">·</span>
+                <span title="Cantidad de ventas históricas registradas que respaldan este dato">
+                  {data.resumen.operaciones} operación{data.resumen.operaciones === 1 ? "" : "es"} registrada{data.resumen.operaciones === 1 ? "" : "s"}
+                </span>
+              </div>
+              {INFO_COINCIDENCIA[data.coincidencia].desc && (
+                <p className={`text-[10px] mt-0.5 ${data.coincidencia === "exacta" ? "text-white/70" : "text-slate-500"}`}>
+                  {INFO_COINCIDENCIA[data.coincidencia].desc}
+                </p>
+              )}
             </div>
 
             {/* Hero: último precio */}
             {data.resumen.ultimo != null && (
-              <div className={`rounded-xl border px-3 py-2.5 flex items-center justify-between gap-2 ${estilos.heroBg}`}>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 flex items-center justify-between gap-2">
                 <div>
                   <p className="text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1">
                     <Clock size={10} /> Último {etiquetaColumna.toLowerCase()} registrado
@@ -315,18 +356,30 @@ function TarjetaHistorial({
                       })}
                     </p>
                   )}
+                  {data.resumen.ultimaCantidad != null && (
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Cantidad: {data.resumen.ultimaCantidad} und.
+                    </p>
+                  )}
                 </div>
-                <p className={`text-[20px] font-extrabold leading-none ${estilos.valorHero}`}>
-                  S/ {Number(data.resumen.ultimo).toFixed(2)}
-                </p>
+                <div className="text-right">
+                  <p className="text-[20px] font-extrabold leading-none text-slate-900">
+                    S/ {Number(data.resumen.ultimo).toFixed(2)}
+                  </p>
+                  {data.resumen.cantidadTotal != null && (
+                    <p className="text-[9px] text-slate-400 mt-1">
+                      {data.resumen.cantidadTotal} und. compradas en total
+                    </p>
+                  )}
+                </div>
               </div>
             )}
-
-            {/* Mínimo / Promedio / Máximo */}
+            
+            {/* Mínimo / Promedio / Máximo — tarjetas neutras, sin colores llamativos */}
             <div className="grid grid-cols-3 gap-2">
-              <Metrica icono={<TrendingDown size={12} />} etiqueta="Mínimo" valor={data.resumen.minimo} color="emerald" />
-              <Metrica icono={<Gauge size={12} />} etiqueta="Promedio" valor={data.resumen.promedio} color="amber" />
-              <Metrica icono={<TrendingUp size={12} />} etiqueta="Máximo" valor={data.resumen.maximo} color="rose" />
+              <Metrica icono={<TrendingDown size={12} />} etiqueta="Mínimo" valor={data.resumen.minimo} tono="minimo" />
+              <Metrica icono={<Gauge size={12} />} etiqueta="Promedio" valor={data.resumen.promedio} tono="promedio" />
+              <Metrica icono={<TrendingUp size={12} />} etiqueta="Máximo" valor={data.resumen.maximo} tono="maximo" />
             </div>
 
             {/* Historial reciente */}
@@ -339,25 +392,38 @@ function TarjetaHistorial({
                   {data.historial.slice(0, 6).map((r, i) => {
                     const nombreProv = nombreProveedorDe(r.proveedorId);
                     const etiqueta = nombreProv || r.clienteNombre;
+                    const codigoRef = r.codigoVenta || r.codigoOp;
                     return (
                       <div
                         key={i}
                         className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-2 py-1.5"
                       >
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-[8.5px] font-bold ${estilos.avatar}`}>
-                          {iniciales(etiqueta)}
-                        </div>
+                        {codigoRef && (
+                          <span className={`shrink-0 text-[10.5px] font-mono font-extrabold rounded-md px-2 py-1 ${estilos.avatar}`}>
+                            {codigoRef}
+                          </span>
+                        )}
                         <div className="min-w-0 flex-1">
-                          <p className="text-[10.5px] text-slate-600 truncate leading-tight">
-                            {etiqueta || "Sin referencia"}
-                          </p>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="text-[10.5px] text-slate-600 truncate leading-tight">
+                              {etiqueta || "Sin referencia"}
+                            </p>
+                          </div>
                           <p className="text-[9px] text-slate-400 leading-tight">
                             {new Date(r.fecha).toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" })}
+                            {r.codigoVenta && r.codigoOp && (
+                              <span className="ml-1 text-slate-300">· {r.codigoOp}</span>
+                            )}
                           </p>
                         </div>
-                        <span className={`text-[11px] font-bold shrink-0 ${estilos.valorHero}`}>
-                          S/ {Number(r.precio).toFixed(2)}
-                        </span>
+                        <div className="flex flex-col items-end shrink-0">
+                          <span className="text-[8.5px] font-semibold text-slate-400">
+                            {r.cantidad != null ? `${r.cantidad} und.` : "— und."}
+                          </span>
+                          <span className="text-[11px] font-bold text-slate-900">
+                            S/ {Number(r.precio).toFixed(2)}
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
@@ -365,25 +431,111 @@ function TarjetaHistorial({
               </div>
             )}
 
-            {/* Por cliente */}
+            {/* Por cliente — con código de venta/OP y explicación de "operaciones" */}
             {data.porCliente && data.porCliente.length > 0 && (
               <div className="pt-2 border-t border-slate-100">
                 <p className="flex items-center gap-1 text-[9.5px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
                   <Users size={10} /> Precio más reciente por cliente
                 </p>
                 <div className="space-y-1">
-                  {data.porCliente.slice(0, 4).map((c) => (
-                    <div key={c.clienteId} className="flex items-center gap-2">
-                      <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-[8.5px] font-bold ${estilos.avatar}`}>
-                        {iniciales(c.clienteNombre)}
+                  {data.porCliente.slice(0, 4).map((c) => {
+                    return (
+                      <div key={c.clienteId} className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-2 py-1.5">
+                        {c.codigoVenta && (
+                          <span className={`shrink-0 text-[10.5px] font-mono font-extrabold rounded-md px-2 py-1 ${estilos.avatar}`}>
+                            {c.codigoVenta}
+                          </span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <span className="text-[10.5px] text-slate-600 truncate block">{c.clienteNombre}</span>
+                          <p
+                            className="text-[9px] text-slate-400"
+                            title="Cantidad de veces que este cliente compró este producto/servicio, según el historial"
+                          >
+                            {c.operaciones} operación{c.operaciones === 1 ? "" : "es"} registrada{c.operaciones === 1 ? "" : "s"}
+                            {c.ultimaFecha && (
+                              <> · {new Date(c.ultimaFecha).toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" })}</>
+                            )}
+                            {c.codigoOp && (
+                              <> · <span className="font-mono font-semibold text-slate-500">{c.codigoOp}</span></>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end shrink-0">
+                          <span className="text-[8.5px] font-semibold text-slate-400">
+                            {c.ultimaCantidad != null ? `${c.ultimaCantidad} und.` : "— und."}
+                          </span>
+                          <span className="text-[11px] font-bold text-slate-900">
+                            S/ {Number(c.ultimoPrecio).toFixed(2)}
+                          </span>
+                        </div>
                       </div>
-                      <span className="text-[10.5px] text-slate-500 truncate flex-1">{c.clienteNombre}</span>
-                      <span className="text-[9.5px] text-slate-400 shrink-0">{c.operaciones} op.</span>
-                      <span className={`text-[11px] font-bold shrink-0 ${estilos.valorHero}`}>
-                        S/ {Number(c.ultimoPrecio).toFixed(2)}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Otras zonas con historial — con código de venta/OP y marca sutil de "Actual" */}
+            {data.porUbicacion && data.porUbicacion.length > 0 && (
+              <div className="pt-2 border-t border-slate-100">
+                <p className="flex items-center gap-1 text-[9.5px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
+                  <MapPin size={10} /> Otras zonas con historial
+                </p>
+                <div className="space-y-1 max-h-[150px] overflow-y-auto pr-0.5">
+                  {data.porUbicacion.slice(0, 6).map((u, i) => {
+                    const esUbicacionActual =
+                      (!departamento || u.departamento?.toUpperCase() === departamento.toUpperCase()) &&
+                      (!provincia || u.provincia?.toUpperCase() === provincia.toUpperCase()) &&
+                      (!distrito || u.distrito?.toUpperCase() === distrito.toUpperCase());
+                 
+                    return (
+                      <div
+                        key={`${u.departamento}-${u.provincia}-${u.distrito}-${i}`}
+                        className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${
+                          esUbicacionActual ? "bg-emerald-50 border-emerald-300" : "bg-slate-50 border-slate-100"
+                        }`}
+                      >
+                        {u.codigoVenta && (
+                          <span className={`shrink-0 text-[10.5px] font-mono font-extrabold rounded-md px-2 py-1 ${estilos.avatar}`}>
+                            {u.codigoVenta}
+                          </span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="text-[10.5px] text-slate-600 truncate leading-tight font-medium">
+                              {[u.distrito, u.provincia, u.departamento].filter(Boolean).join(" / ") || "Sin ubicación registrada"}
+                            </p>
+                            {esUbicacionActual && (
+                              <span className="shrink-0 text-[8px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-100 border border-emerald-300 rounded px-1 py-[1px]">
+                                Actual
+                              </span>
+                            )}
+                          </div>
+                          <p
+                            className="text-[9px] text-slate-400 leading-tight"
+                            title="Cantidad de operaciones registradas en esta zona para este producto/transporte"
+                          >
+                            {u.operaciones} operación{u.operaciones === 1 ? "" : "es"}
+                            {u.ultimaFecha && (
+                              <> · {new Date(u.ultimaFecha).toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" })}</>
+                            )}
+                            {u.codigoOp && (
+                              <> · <span className="font-mono font-semibold text-indigo-500">{u.codigoOp}</span></>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end shrink-0">
+                          <span className="text-[8.5px] font-semibold text-slate-400">
+                            {u.ultimaCantidad != null ? `${u.ultimaCantidad} und.` : "— und."}
+                          </span>
+                          <span className="text-[11px] font-bold text-slate-900">
+                            S/ {Number(u.ultimoPrecio).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -395,22 +547,22 @@ function TarjetaHistorial({
 }
 
 function Metrica({
-  icono, etiqueta, valor, color,
+  icono, etiqueta, valor, tono,
 }: {
-  icono: React.ReactNode; etiqueta: string; valor: number | null; color: "emerald" | "amber" | "rose";
+  icono: React.ReactNode; etiqueta: string; valor: number | null; tono: "minimo" | "promedio" | "maximo";
 }) {
-  const estilos = {
-    emerald: "bg-emerald-50 border-emerald-200 text-emerald-700",
-    amber: "bg-amber-50 border-amber-200 text-amber-700",
-    rose: "bg-rose-50 border-rose-200 text-rose-700",
-  }[color];
+  const colorValor = {
+    minimo: "text-emerald-700",
+    promedio: "text-slate-700",
+    maximo: "text-rose-700",
+  }[tono];
   return (
-    <div className={`rounded-xl border px-2 py-1.5 flex flex-col items-center text-center ${estilos}`}>
-      <div className="flex items-center gap-1 opacity-80">
+    <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 flex flex-col items-center text-center">
+      <div className="flex items-center gap-1 text-slate-400">
         {icono}
         <span className="text-[8.5px] font-semibold uppercase tracking-wide">{etiqueta}</span>
       </div>
-      <p className="text-[13px] font-extrabold leading-tight mt-1">
+      <p className={`text-[13px] font-extrabold leading-tight mt-1 ${colorValor}`}>
         {valor != null ? `S/ ${Number(valor).toFixed(2)}` : "—"}
       </p>
     </div>

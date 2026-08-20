@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 # CONFIG — edita estos valores con tus datos reales.
 # ============================================================
 API_BASE_URL = "https://manager-multilimpsac-production.up.railway.app"
-API_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjUsImVtYWlsIjoibG9nMi5ycGNAZ3J1cG9lY29saW1wLmNvbSIsImlhdCI6MTc4NzE1MDU1MiwiZXhwIjoxNzg3MTkzNzUyfQ.ow17mwRqgpXwCepurXLjYbTtfweKRo066-9hvYY09YI"
+API_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjUsImVtYWlsIjoibG9nMi5ycGNAZ3J1cG9lY29saW1wLmNvbSIsImlhdCI6MTc4NzIzNTc3OCwiZXhwIjoxNzg3Mjc4OTc4fQ.U6OOPCBMm-f7aAzslnFxdzrwim1eLiWB8y9nJNaeYOQ"
 
 
 
@@ -131,6 +131,7 @@ def extraer_registros_de_venta(venta):
     registros_flete = []
 
     venta_id = venta["id"]
+    codigo_venta = venta.get("codigoVenta")
     cliente_id = venta.get("clienteId")
     departamento = venta.get("departamentoEntrega")
     provincia = venta.get("provinciaEntrega")
@@ -140,6 +141,7 @@ def extraer_registros_de_venta(venta):
     for op in venta.get("ordenesProveedor") or []:
         proveedor_id = op.get("proveedorId")
         orden_proveedor_id = op.get("id")
+        codigo_op = op.get("codigoOp")
 
         # --- Precios de producto ---
         if proveedor_id:
@@ -154,9 +156,12 @@ def extraer_registros_de_venta(venta):
                     "proveedor_id": proveedor_id,
                     "cliente_id": cliente_id,
                     "venta_id": venta_id,
+                    "codigo_venta": codigo_venta,
                     "orden_proveedor_id": orden_proveedor_id,
+                    "codigo_op": codigo_op,
                     "op_producto_id": prod.get("id"),
                     "precio_unitario": precio,
+                    "cantidad": prod.get("cantidad"),
                     "departamento": departamento,
                     "provincia": provincia,
                     "distrito": distrito,
@@ -166,6 +171,14 @@ def extraer_registros_de_venta(venta):
             log.warning(f"OP {orden_proveedor_id} de venta {venta_id} sin proveedorId — se omite precios de producto.")
 
         # --- Precios de flete (uno por transporteAsignado, NUNCA por producto) ---
+        # cantidad_total = suma de unidades de TODOS los productos de esta OP,
+        # es decir cuántas unidades viajaron juntas en este envío/flete.
+        # No es "unidades por producto" (eso solo existe en notaTransporte,
+        # texto libre no confiable) — es el volumen total del despacho.
+        productos_op = op.get("productos") or []
+        cantidades_op = [p.get("cantidad") for p in productos_op if p.get("cantidad") is not None]
+        cantidad_total_envio = sum(cantidades_op) if cantidades_op else None
+
         for ta in op.get("transportesAsignados") or []:
             monto = ta.get("montoFlete")
             transporte_id = ta.get("transporteId")
@@ -175,11 +188,14 @@ def extraer_registros_de_venta(venta):
                 "transporte_id": transporte_id,
                 "cliente_id": cliente_id,
                 "venta_id": venta_id,
+                "codigo_venta": codigo_venta,
                 "orden_proveedor_id": orden_proveedor_id,
+                "codigo_op": codigo_op,
                 "transporte_asignado_id": ta.get("id"),
                 "tipo_destino": ta.get("tipoDestino"),
                 "precio_flete": monto,
                 "precio_flete_pagado": ta.get("montoFletePagado"),
+                "cantidad_total": cantidad_total_envio,
                 # Regla 34: destino real del servicio = ubicación de la VENTA,
                 # no la sede de la agencia. region/provincia/distrito del
                 # transporteAsignado suelen venir null en tus datos reales.
@@ -188,7 +204,6 @@ def extraer_registros_de_venta(venta):
                 "distrito": distrito,
                 "fecha_operacion": fecha_operacion,
             })
-
     return registros_proveedor, registros_flete
 
 
@@ -198,31 +213,37 @@ def extraer_registros_de_venta(venta):
 SQL_INSERT_PROVEEDOR = """
 INSERT INTO historial_precios_proveedor
   (producto_codigo, producto_descripcion_snapshot, unidad_medida,
-   proveedor_id, cliente_id, venta_id, orden_proveedor_id, op_producto_id,
-   precio_unitario, departamento, provincia, distrito,
+   proveedor_id, cliente_id, venta_id, codigo_venta, orden_proveedor_id, codigo_op, op_producto_id,
+   precio_unitario, cantidad, departamento, provincia, distrito,
    fecha_operacion, fuente)
 VALUES
   (%(producto_codigo)s, %(producto_descripcion_snapshot)s, %(unidad_medida)s,
-   %(proveedor_id)s, %(cliente_id)s, %(venta_id)s, %(orden_proveedor_id)s, %(op_producto_id)s,
-   %(precio_unitario)s, %(departamento)s, %(provincia)s, %(distrito)s,
+   %(proveedor_id)s, %(cliente_id)s, %(venta_id)s, %(codigo_venta)s, %(orden_proveedor_id)s, %(codigo_op)s, %(op_producto_id)s,
+   %(precio_unitario)s, %(cantidad)s, %(departamento)s, %(provincia)s, %(distrito)s,
    %(fecha_operacion)s, 'MIGRACION_HISTORICA')
 ON DUPLICATE KEY UPDATE
   precio_unitario = VALUES(precio_unitario),
+  cantidad = VALUES(cantidad),
+  codigo_venta = VALUES(codigo_venta),
+  codigo_op = VALUES(codigo_op),
   fecha_operacion = VALUES(fecha_operacion)
 """
 
 SQL_INSERT_FLETE = """
 INSERT INTO historial_precios_flete
-  (transporte_id, cliente_id, venta_id, orden_proveedor_id, transporte_asignado_id,
-   tipo_destino, precio_flete, precio_flete_pagado,
+  (transporte_id, cliente_id, venta_id, codigo_venta, orden_proveedor_id, codigo_op, transporte_asignado_id,
+   tipo_destino, precio_flete, precio_flete_pagado, cantidad_total,
    departamento, provincia, distrito, fecha_operacion, fuente)
 VALUES
-  (%(transporte_id)s, %(cliente_id)s, %(venta_id)s, %(orden_proveedor_id)s, %(transporte_asignado_id)s,
-   %(tipo_destino)s, %(precio_flete)s, %(precio_flete_pagado)s,
+  (%(transporte_id)s, %(cliente_id)s, %(venta_id)s, %(codigo_venta)s, %(orden_proveedor_id)s, %(codigo_op)s, %(transporte_asignado_id)s,
+   %(tipo_destino)s, %(precio_flete)s, %(precio_flete_pagado)s, %(cantidad_total)s,
    %(departamento)s, %(provincia)s, %(distrito)s, %(fecha_operacion)s, 'MIGRACION_HISTORICA')
 ON DUPLICATE KEY UPDATE
   precio_flete = VALUES(precio_flete),
   precio_flete_pagado = VALUES(precio_flete_pagado),
+  cantidad_total = VALUES(cantidad_total),
+  codigo_venta = VALUES(codigo_venta),
+  codigo_op = VALUES(codigo_op),
   fecha_operacion = VALUES(fecha_operacion)
 """
 

@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import {
   X, Loader2, Send, ShieldCheck, RefreshCw, FileText, Package,
   Building2, Users, MessageSquareText, AlertTriangle, CheckCircle2,
-  Image as ImageIcon, Calendar, Landmark, UserCheck,
+  Image as ImageIcon, Calendar, Landmark, UserCheck, Truck,
 } from "lucide-react";
 import { EmpresaOption } from "./erp-shared";
 import { HistorialPrecioProveedor, HistorialPrecioFlete } from "./HistorialComercialCard";
@@ -213,7 +213,7 @@ export default function FormularioProductoModal({
 
 
   const faltantes = faltantesDe(form);
-  const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
+    const [docActivo, setDocActivo] = useState<string>("oce");
   const [visorEvidencia, setVisorEvidencia] = useState<{ url: string; titulo: string } | null>(null);
 
   useEffect(() => {
@@ -226,6 +226,7 @@ export default function FormularioProductoModal({
   }, [visorEvidencia]);
 
   // Click en el tipo ya seleccionado = deseleccionar (vuelve a "sin elegir")
+  // Click en el tipo ya seleccionado = deseleccionar (vuelve a "sin elegir")
   const elegirTipoEnvio = (tipo: "ENTIDAD" | "AGENCIA") => {
     if (soloLectura) return;
     if (form.tipo_envio === tipo) {
@@ -235,6 +236,45 @@ export default function FormularioProductoModal({
     actualizarCampo(codigo, "tipo_envio", tipo);
     actualizarCampo(codigo, "observaciones", tipo === "AGENCIA" ? TEXTO_OBS_AGENCIA : TEXTO_OBS_ENTIDAD);
   };
+
+  // Tabs adicionales del visor lateral — historial de precios, al costado
+  // de OCE/OCF. El de flete solo aparece si el envío es por AGENCIA.
+  const tabsExtra = [
+    {
+      id: "precio",
+      label: "Hist. precio",
+      icon: <Package size={13} />,
+      contenido: (
+        <HistorialPrecioProveedor
+          codigo={codigo}
+          proveedores={proveedores}
+          clienteId={clienteId}
+          departamento={departamentoEntrega}
+          provincia={provinciaEntrega}
+          distrito={distritoEntrega}
+        />
+      ),
+    },
+    ...(form.tipo_envio === "AGENCIA"
+      ? [
+          {
+            id: "flete",
+            label: "Hist. flete",
+            icon: <Truck size={13} />,
+            contenido: (
+              <HistorialPrecioFlete
+                transporteId={form.transporte_id}
+                transporteNombre={form.agencia_transporte}
+                clienteId={clienteId}
+                departamento={departamentoEntrega}
+                provincia={provinciaEntrega}
+                distrito={distritoEntrega}
+              />
+            ),
+          },
+        ]
+      : []),
+  ];
 
 return (
     <>
@@ -284,14 +324,6 @@ return (
                   {renderBuscadorProveedor()}
                   {renderContactoProveedor()}
 
-                  <HistorialPrecioProveedor
-                    codigo={codigo}
-                    proveedores={proveedores}
-                    clienteId={clienteId}
-                    departamento={departamentoEntrega}
-                    provincia={provinciaEntrega}
-                    distrito={distritoEntrega}
-                  />
                   <div className="grid grid-cols-2 gap-3">
                     <CampoSimple
                       label="Teléfono proveedor"
@@ -434,14 +466,6 @@ return (
                   {form.tipo_envio === "AGENCIA" ? (
                     <div className="space-y-2.5">
                       {renderBuscadorTransporte()}
-                      <HistorialPrecioFlete
-                        transporteId={form.transporte_id}
-                        transporteNombre={form.agencia_transporte}
-                        clienteId={clienteId}
-                        departamento={departamentoEntrega}
-                        provincia={provinciaEntrega}
-                        distrito={distritoEntrega}
-                      />
                       <CampoSimple
                         label="Precio flete"
                         value={form.precio_flete}
@@ -626,7 +650,7 @@ return (
               un padre con altura fija) y es más ancho para leer mejor.
               Solo se muestra si el padre (OpsDrawer.tsx) envía al menos
               una de las dos URLs. */}
-          {(urlOce || urlOcf) && (
+          {(urlOce || urlOcf || tabsExtra.length > 0) && (
             <div className="w-full xl:w-[600px] shrink-0 h-full">
               <VisorDocumentos
                 docActivo={docActivo}
@@ -635,6 +659,7 @@ return (
                 urlOcf={urlOcf ?? null}
                 nombreOce={urlOce ? nombreDesdeUrl(urlOce) : null}
                 nombreOcf={urlOcf ? nombreDesdeUrl(urlOcf) : null}
+                tabsExtra={tabsExtra}
               />
             </div>
           )}
@@ -780,24 +805,28 @@ export function VisorDocumentos({
   urlOcf,
   nombreOce,
   nombreOcf,
+  tabsExtra,
 }: {
-  docActivo: "oce" | "ocf";
-  onCambiarDoc: (d: "oce" | "ocf") => void;
+  docActivo: string;
+  onCambiarDoc: (d: string) => void;
   urlOce: string | null;
   urlOcf: string | null;
   nombreOce: string | null;
   nombreOcf: string | null;
+  /** Tabs adicionales al costado de OCE/OCF — ej. historial de precio/flete. */
+  tabsExtra?: { id: string; label: string; icon: React.ReactNode; contenido: React.ReactNode }[];
 }) {
-  const urlActiva = docActivo === "oce" ? urlOce : urlOcf;
-  const nombreActivo = docActivo === "oce" ? nombreOce : nombreOcf;
+  const tabExtraActivo = tabsExtra?.find((t) => t.id === docActivo);
+  const urlActiva = docActivo === "oce" ? urlOce : docActivo === "ocf" ? urlOcf : null;
+  const nombreActivo = docActivo === "oce" ? nombreOce : docActivo === "ocf" ? nombreOcf : null;
 
   return (
     <div className="h-full bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col">
-      <div className="flex items-center border-b border-slate-200 shrink-0">
+      <div className="flex items-center border-b border-slate-200 shrink-0 overflow-x-auto">
         <button
           type="button"
           onClick={() => onCambiarDoc("oce")}
-          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors ${
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors ${
             docActivo === "oce"
               ? "text-[#4F46E5] border-b-2 border-[#4F46E5] bg-indigo-50/40"
               : "text-slate-400 hover:text-slate-600"
@@ -808,7 +837,7 @@ export function VisorDocumentos({
         <button
           type="button"
           onClick={() => onCambiarDoc("ocf")}
-          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors ${
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors ${
             docActivo === "ocf"
               ? "text-[#4F46E5] border-b-2 border-[#4F46E5] bg-indigo-50/40"
               : "text-slate-400 hover:text-slate-600"
@@ -816,16 +845,32 @@ export function VisorDocumentos({
         >
           <FileText size={13} /> OCF (Física)
         </button>
+        {tabsExtra?.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onCambiarDoc(t.id)}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+              docActivo === t.id
+                ? "text-[#4F46E5] border-b-2 border-[#4F46E5] bg-indigo-50/40"
+                : "text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            {t.icon} {t.label}
+          </button>
+        ))}
       </div>
 
-      {nombreActivo && (
+      {!tabExtraActivo && nombreActivo && (
         <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[11px] text-slate-500 truncate shrink-0">
           {nombreActivo}
         </div>
       )}
 
-      <div className="flex-1 min-h-0 bg-slate-100">
-        {urlActiva ? (
+      <div className="flex-1 min-h-0 bg-slate-100 overflow-y-auto">
+        {tabExtraActivo ? (
+          <div className="p-3">{tabExtraActivo.contenido}</div>
+        ) : urlActiva ? (
           <iframe
             src={`${urlActiva}#navpanes=0&toolbar=0&statusbar=0`}
             className="w-full h-full"
@@ -845,8 +890,6 @@ export function VisorDocumentos({
     </div>
   );
 }
-
-
 
 function IconoArchivo({ url, size = 12 }: { url: string; size?: number }) {
   const esImagen = /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(url);

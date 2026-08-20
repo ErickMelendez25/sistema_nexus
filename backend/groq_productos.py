@@ -144,7 +144,7 @@ def _deduplicar_productos(productos: list[dict]) -> list[dict]:
     return [agrupados[k] for k in orden]
 
 
-MAX_REINTENTOS_GROQ = 4  # además de los reintentos internos del cliente (max_retries=5)
+
 
 
 async def extraer_productos_groq(texto_pdf: str) -> dict:

@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Lock,
 } from "lucide-react";
+import { ModalConsultarPrecios } from "./ModalConsultarPrecios";
 
 const API_BASE = process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
 
@@ -698,6 +699,7 @@ export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion,
   const [filtroConfirmadoPor, setFiltroConfirmadoPor] = useState("");
   const [filtroPrivadas, setFiltroPrivadas] = useState(false);
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
+  const [modalPreciosAbierto, setModalPreciosAbierto] = useState(false);
 
   const [pagina, setPagina] = useState(1);
 
@@ -863,6 +865,13 @@ const filtrosActivos = [
         </div>
         <div className="flex items-center gap-2">
         <button
+            onClick={() => setModalPreciosAbierto(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-sky-200 bg-sky-50 text-sm font-medium text-sky-700 hover:border-sky-300 hover:bg-sky-100 transition-colors"
+          >
+            <DollarSign size={14} />
+            Consultar precios
+          </button>
+        <button
             onClick={() => setMostrarFiltros((x) => !x)}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
               mostrarFiltros || filtrosActivos > 0
@@ -899,6 +908,11 @@ const filtrosActivos = [
           </button>
         </div>
       </div>
+
+      <ModalConsultarPrecios
+        abierto={modalPreciosAbierto}
+        onCerrar={() => setModalPreciosAbierto(false)}
+      />
 
       {sinSesion && (
         <div className="mb-6 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">

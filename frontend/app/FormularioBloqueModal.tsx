@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  X, Package, Building2, Users, MessageSquareText, FileText,
+  X, Package, Building2, Users, MessageSquareText, FileText, Truck,
 } from "lucide-react";
 import { useState } from "react";
 import { EmpresaOption, calcularMargen } from "./erp-shared";
@@ -111,7 +111,7 @@ export default function FormularioBloqueModal({
   const [tabActivo, setTabActivo] = useState<string | null>(
     productoInicial ?? (items[0]?.codigo ?? null)
   );
-  const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
+    const [docActivo, setDocActivo] = useState<string>("oce");
 
   const elegirTipoEnvio = (tipo: "ENTIDAD" | "AGENCIA") => {
     if (soloLectura) return;
@@ -119,7 +119,46 @@ export default function FormularioBloqueModal({
     actualizarCompartido("observaciones", tipo === "AGENCIA" ? TEXTO_OBS_AGENCIA : TEXTO_OBS_ENTIDAD);
   };
 
-  const hayVisor = !!(urlOce || urlOcf);
+  // Tabs adicionales del visor lateral — historial de precios, al costado
+  // de OCE/OCF. El de flete solo aparece si el envío del bloque es AGENCIA.
+  const codigoActivo = tabActivo || items[0]?.codigo;
+  const tabsExtra = [
+    {
+      id: "precio",
+      label: "Hist. precio",
+      icon: <Package size={13} />,
+      contenido: (
+        <HistorialPrecioProveedor
+          codigo={codigoActivo}
+          clienteId={clienteId}
+          departamento={departamentoEntrega}
+          provincia={provinciaEntrega}
+          distrito={distritoEntrega}
+        />
+      ),
+    },
+    ...(compartido.tipo_envio === "AGENCIA"
+      ? [
+          {
+            id: "flete",
+            label: "Hist. flete",
+            icon: <Truck size={13} />,
+            contenido: (
+              <HistorialPrecioFlete
+                transporteId={compartido.transporte_id}
+                transporteNombre={compartido.agencia_transporte}
+                clienteId={clienteId}
+                departamento={departamentoEntrega}
+                provincia={provinciaEntrega}
+                distrito={distritoEntrega}
+              />
+            ),
+          },
+        ]
+      : []),
+  ];
+
+  const hayVisor = !!(urlOce || urlOcf) || tabsExtra.length > 0;
 
   return (
       <div
@@ -142,14 +181,6 @@ export default function FormularioBloqueModal({
 
             {renderBuscadorProveedor()}
             {renderContactoProveedor()}
-
-            <HistorialPrecioProveedor
-              codigo={tabActivo || items[0]?.codigo}
-              clienteId={clienteId}
-              departamento={departamentoEntrega}
-              provincia={provinciaEntrega}
-              distrito={distritoEntrega}
-            />
 
             <CampoSimple
               label="Teléfono proveedor"
@@ -219,14 +250,6 @@ export default function FormularioBloqueModal({
             {compartido.tipo_envio === "AGENCIA" ? (
               <div className="space-y-2">
                 {renderBuscadorTransporte()}
-                <HistorialPrecioFlete
-                  transporteId={compartido.transporte_id}
-                  transporteNombre={compartido.agencia_transporte}
-                  clienteId={clienteId}
-                  departamento={departamentoEntrega}
-                  provincia={provinciaEntrega}
-                  distrito={distritoEntrega}
-                />
                 <div>
                   <label className="block text-[11px] font-medium text-slate-500 mb-1">Observaciones transporte</label>
                   <textarea
@@ -426,6 +449,7 @@ export default function FormularioBloqueModal({
               urlOcf={urlOcf ?? null}
               nombreOce={urlOce ? nombreDesdeUrl(urlOce) : null}
               nombreOcf={urlOcf ? nombreDesdeUrl(urlOcf) : null}
+              tabsExtra={tabsExtra}
             />
           </div>
         </div>
