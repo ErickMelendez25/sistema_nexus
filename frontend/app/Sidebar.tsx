@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, ReactNode } from "react";
+import CumpleanosWidget from "./CumpleanosWidget";
 import {
   ShieldCheck, ChevronsLeft, ChevronsRight, Menu, X, LogOut,
   Bell, LogIn, Loader2, CheckCircle2, Wifi, WifiOff, FileScan,
   ChevronDown, Receipt, FileText, FileSignature,
-  Briefcase, PieChart,
+  Briefcase, PieChart, Mail,
   LucideIcon,
 } from "lucide-react";
 
@@ -160,6 +161,7 @@ const esCobranzas = rol === "cobranzas";
 const esAdmin = rol === "admin";
 const esPracticante = rol === "practicante";
 const esSeguimiento = rol === "seguimiento";
+const esContabilidad = rol === "contabilidad";
 
   const iniciales =
     nombreUsuario
@@ -343,18 +345,20 @@ const esSeguimiento = rol === "seguimiento";
       </div>
 
       {/* Crear orden */}
-      <div className="px-3 py-3 border-b border-white/10 shrink-0">
-        <button
-          onClick={onCrearOrden}
-          title="Crear orden"
-          className={`flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold bg-[#3B5BFF] text-white hover:bg-[#2f49d6] transition-colors w-full ${
-            colapsado ? "h-9" : "py-2"
-          }`}
-        >
-          <FileScan size={14} />
-          {!colapsado && "Crear orden"}
-        </button>
-      </div>
+      {!esContabilidad && (
+        <div className="px-3 py-3 border-b border-white/10 shrink-0">
+          <button
+            onClick={onCrearOrden}
+            title="Crear orden"
+            className={`flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold bg-[#3B5BFF] text-white hover:bg-[#2f49d6] transition-colors w-full ${
+              colapsado ? "h-9" : "py-2"
+            }`}
+          >
+            <FileScan size={14} />
+            {!colapsado && "Crear orden"}
+          </button>
+        </div>
+      )}
 
             {/* Notificaciones */}
       <div className="px-2 py-2 border-t border-white/10 relative shrink-0">
@@ -378,6 +382,9 @@ const esSeguimiento = rol === "seguimiento";
         {/* El dropdown real (contenido) lo pasa page.tsx por prop */}
         {panelNotificaciones}
       </div>
+
+      {/* Cumpleaños — módulo con alerta por WebSocket */}
+      <CumpleanosWidget apiBase={apiBase} colapsado={colapsado} />
 
       {/* Navegación (tabs) */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
@@ -466,11 +473,12 @@ const esSeguimiento = rol === "seguimiento";
 
         {/* Grupo: Equipo Ventas (Operaciones / Big Data) — fijo, visible
             para cualquier rol, igual que el grupo Cobranzas de arriba. */}
-      {!esCobranzas && !esSeguimiento && ( 
+      {!esCobranzas && !esSeguimiento && !esContabilidad && ( 
       <div className="pt-1">
           <button
             onClick={() => setEquipoVentasAbierto((v) => !v)}
             title="Equipo Ventas"
+   
             className={`flex items-center w-full rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors text-slate-300 hover:bg-white/10 hover:text-white ${
               colapsado ? "justify-center" : "justify-between"
             }`}

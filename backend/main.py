@@ -84,6 +84,12 @@ from routers import perucompras_plazo_router as perucompras_plazo_router_mod
 
 from routers import historial_comercial as historial_comercial_mod
 
+
+
+from routers import email_router
+
+from routers import cumpleanos as cumpleanos_mod
+
 from chat import router as chat_router
 
 logger = logging.getLogger("helbot.main")
@@ -101,6 +107,11 @@ ERP_PASS = os.getenv("ERP_PASS", "")
 # App
 # ============================================================
 app = FastAPI(title="Helbot API", version="0.1.0")
+
+@app.on_event("startup")
+async def iniciar_tarea_cumpleanos():
+    import asyncio
+    asyncio.create_task(cumpleanos_mod.tarea_cumpleanos_loop())
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -121,7 +132,7 @@ CORS_ORIGINS = [
     "https://gruecolimp.com",
     "http://localhost:3002",
     "http://127.0.0.1:3002",
-    "http://192.168.1.41:3002",
+    "http://192.168.1.86:3002",
     "http://192.168.18.33:3002",
     "http://192.168.18.139:3002",
     "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
@@ -160,6 +171,11 @@ app.include_router(perucompras_plazo_router_mod.router)
 
 
 app.include_router(historial_comercial_mod.router)
+
+
+app.include_router(email_router.router, prefix="/api/email", tags=["Correo"])
+
+app.include_router(cumpleanos_mod.router)
 
 app.include_router(chat_router)
 

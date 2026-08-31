@@ -7,7 +7,7 @@ import {
   Radar, Bell, FileScan, Search, CheckCircle2, Circle, Loader2,
   Upload, Wifi, WifiOff, ShieldCheck, DollarSign, RefreshCw, ChevronRight,
   AlertTriangle, X, LogIn, Menu, LucideIcon, GitCompareArrows, ChevronDown, ChevronUp,
-LogOut, BarChart3, User, Briefcase, PieChart, MessageSquare, Send, Percent, Clock,
+LogOut, BarChart3, User, Briefcase, PieChart, MessageSquare, Send, Percent, Clock, Mail,
 } from "lucide-react";
 import {
   BarChart,
@@ -41,6 +41,7 @@ import {
   import CartaNotaDebito from "./components/cobranzas/CartaNotaDebito";
   import EquipoVentasOperaciones from "./components/equipo-ventas/EquipoVentasOperaciones";
   import EquipoVentasBigData from "./components/equipo-ventas/EquipoVentasBigData";
+   import TabCorreo from "./TabCorreo";
 
   import LlamadaOverlay, { LlamadaEstado } from "./LlamadaOverlay";
 
@@ -272,7 +273,7 @@ interface ResumenChat {
   type FiltroPublicadas = { acuerdo_marco: string; catalogo: string; categoria: string };
 
   type TabId = "monitor" | "ficha" | "ventas" | "ventas_erp" | "auditoria" |"chat"| "cobranzas-doc-pago"
-    | "cobranzas-carta-nota" | "equipo-ventas-operaciones" | "equipo-ventas-bigdata";
+    | "cobranzas-carta-nota" | "equipo-ventas-operaciones" | "equipo-ventas-bigdata" | "correo";
 
   // ============================================================
   // Animaciones globales — styled-jsx (nativo de Next.js) serializa el
@@ -1065,6 +1066,7 @@ interface ResumenChat {
     const esAdmin = rol === "admin";
     const esGerencia = rol === "gerencia" || rol === "admin";
     const esPracticante = rol === "practicante";
+    const esContabilidad = rol === "contabilidad";
   // Logística y Ventas solo trabajan con el ERP, nunca con Peru Compras.
     const puedeUsarPeruCompras = esSeguimiento || esAdmin;
 
@@ -1799,6 +1801,7 @@ interface ResumenChat {
       { id: "ventas", label: "Ventas · precios", labelCorta: "Ventas", icon: DollarSign },
       { id: "ventas_erp", label: "Ventas ERP (todas)", labelCorta: "ERP Ventas", icon: DollarSign },
       { id: "auditoria", label: "Auditoría · seguimiento", labelCorta: "Auditoría", icon: BarChart3 },
+      { id: "correo", label: "Correo", labelCorta: "Correo", icon: Mail },
       // "Equipo Ventas · Operaciones" y "Equipo Ventas · Big Data" YA NO
       // viven aquí — igual que "Cobranzas", ahora son un grupo fijo,
       // hardcodeado en Sidebar.tsx, visible para CUALQUIER rol sin
@@ -1815,10 +1818,12 @@ const tabs = esAdmin
     ? todosLosTabs.filter((t) => t.id === "auditoria" || t.id === "chat")
     : esSeguimiento
     ? todosLosTabs
+    : esContabilidad
+    ? todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "auditoria")
     : esPracticante
     ? todosLosTabs.filter((t) => t.id === "chat")
     : esVentas
-    ? todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat" || t.id === "ficha")
+    ? todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat" || t.id === "ficha" || t.id === "correo")
     : esCobranzas
     ? todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat" || t.id === "ficha")
     : todosLosTabs.filter((t) => t.id === "ventas_erp" || t.id === "chat");
@@ -1868,12 +1873,16 @@ const tabs = esAdmin
         ) {
           setTab("ventas_erp");
         }
+        } else if (esContabilidad) {
+          if (tab !== "ventas_erp" && tab !== "auditoria") {
+            setTab("ventas_erp");
+          }
         } else if (esPracticante) {
             if (tab !== "equipo-ventas-operaciones" && tab !== "chat") {
               setTab("equipo-ventas-operaciones");
             }
           } else if (esVentas) {
-            if (tab !== "ventas_erp" && tab !== "chat" && tab !== "ficha") {
+            if (tab !== "ventas_erp" && tab !== "chat" && tab !== "ficha" && tab !== "correo") {
               setTab("ventas_erp");
             }
           } else {
@@ -2243,6 +2252,8 @@ const tabs = esAdmin
               ? chatConversacionAbierta
                 ? "h-screen" // conversación abierta en mobile: sin espacio reservado, la hamburguesa ya está oculta
                 : "h-screen pt-16 md:pt-0"
+              : tab === "correo"
+              ? "h-screen pt-16 md:pt-0"
               : "max-w-[1920px] mx-auto px-4 sm:px-8 py-6 sm:py-8 pt-16 md:pt-6"
           }
         >
@@ -2283,6 +2294,7 @@ const tabs = esAdmin
               onAbrirOps={setVentaOpsAbierta}
               onIniciarOps={iniciarOps}
               onVerOrdenExistente={abrirVerOrdenExistente}
+              soloLecturaGlobal={rol === "contabilidad"}
               seguimientosPorOrden={seguimientosPorOrden}
               detallesPorOrden={detallesPorOrden}
               usuarioActual={usuarioActual}
@@ -2297,6 +2309,10 @@ const tabs = esAdmin
               onAbrirProducto={abrirProductoDesdeAuditoria}
               filaCargando={productoAperturaEnCurso}
             />
+          )}
+
+          {tab === "correo" && (
+            <TabCorreo apiBase={API_BASE} cuentaMonitor="ventas@multilimpsac.com" />
           )}
 
             {/* 👇 AGREGAR ESTO */}
@@ -2343,6 +2359,7 @@ const tabs = esAdmin
           onClose={() => setVentaOpsAbierta(null)}
           usuarioActual={usuarioActual}
           esSeguimiento={esSeguimiento}
+          soloLecturaGlobal={esContabilidad}
           tick={tickAuditoria}
           ultimoEventoOps={ultimoEventoOps}
         />

@@ -693,7 +693,7 @@ return (
 
           <div className="flex items-center gap-2 shrink-0">
             {/* Ventas: pendiente/preview -> enviar */}
-            {!esSeguimiento && (estado === "pendiente" || estado === "preview") && onEnviarParaRevision && (
+            {!soloLectura && !esSeguimiento && (estado === "pendiente" || estado === "preview") && onEnviarParaRevision && (
               <button
                 onClick={onEnviarParaRevision}
                 disabled={guardando}
@@ -705,7 +705,7 @@ return (
             )}
 
             {/* Seguimiento: preview -> guardar + confirmar */}
-            {esSeguimiento && estado === "preview" && (
+            {!soloLectura && esSeguimiento && estado === "preview" && (
               <>
                 {onGuardarCambios && (
                   <button
@@ -731,7 +731,7 @@ return (
             )}
 
             {/* Seguimiento: confirmado/subido -> guardar + actualizar ERP */}
-            {esSeguimiento && (estado === "confirmado" || estado === "subido") && (
+            {!soloLectura && esSeguimiento && (estado === "confirmado" || estado === "subido") && (
               <>
                 {onGuardarCambios && (
                   <button

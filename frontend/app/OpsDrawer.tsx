@@ -19,6 +19,7 @@ interface Props {
   onClose: () => void;
   usuarioActual: string;
   esSeguimiento: boolean;
+  soloLecturaGlobal?: boolean;
   tick?: number;
   ultimoEventoOps?: { tipo: string; orden_compra_id?: number } | null;
 }
@@ -816,7 +817,7 @@ function OverlayProcesando({ mensaje }: { mensaje: string }) {
 }
 
 
-export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento, tick, ultimoEventoOps }: Props) {
+export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento, soloLecturaGlobal, tick, ultimoEventoOps }: Props) {
   const [ops, setOps] = useState<OpResumen[]>([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
@@ -984,6 +985,7 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
             venta={venta}
             usuarioActual={usuarioActual}
             esSeguimiento={esSeguimiento}
+            soloLecturaGlobal={soloLecturaGlobal}
             productoInicial={(venta as any)._productoAbrir}
             grupoInicial={(venta as any)._grupoAbrir}
             onFinalizado={onFinalizadoFormulario}
@@ -2404,7 +2406,7 @@ function ModalDetalleProductoErpReal({
   urlOcf?: string | null;
   onCerrar: () => void;
 }) {
-  const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
+  const [docActivo, setDocActivo] = useState<string>("oce");
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={onCerrar} />
@@ -2568,7 +2570,7 @@ function PanelEnvioBloque({
   const soloLectura = modo === "ver" && !esSeguimiento;
   const [guardandoBloque, setGuardandoBloque] = useState(false);
   const [actualizandoErpBloque, setActualizandoErpBloque] = useState(false);
-  const [docActivo, setDocActivo] = useState<"oce" | "ocf">("oce");
+  const [docActivo, setDocActivo] = useState<string>("oce");
 
   const primerSeg = modo !== "crear" ? (seguimientosGrupo || [])[0] || null : null;
 
@@ -3250,6 +3252,7 @@ function FormularioCrearProveedor({
   venta,
   usuarioActual,
   esSeguimiento,
+  soloLecturaGlobal,
   productoInicial,
   grupoInicial,
   onFinalizado,
@@ -3262,11 +3265,12 @@ function FormularioCrearProveedor({
   agregarTransporte,
   ops,
   ultimoEventoOps,
-  mostrarToast,   // <-- AGREGAR
+  mostrarToast,
 }: {
   venta: VentaErp;
   usuarioActual: string;
   esSeguimiento: boolean;
+  soloLecturaGlobal?: boolean;
   productoInicial?: string;
   grupoInicial?: string;
   onFinalizado: () => void;
@@ -3279,7 +3283,7 @@ function FormularioCrearProveedor({
   agregarTransporte: (nuevo: TransporteOption) => void;
   ops?: OpResumen[];
   ultimoEventoOps?: { tipo: string; orden_compra_id?: number } | null;
-  mostrarToast: (tipo: "success" | "error", mensaje: string) => void;  // <-- AGREGAR
+  mostrarToast: (tipo: "success" | "error", mensaje: string) => void;
 }) {
 
   // Si el producto viene acompañado de grupoInicial, significa que
@@ -4341,7 +4345,7 @@ return (
     <h3 className="text-sm font-semibold text-slate-800">
       Productos de la venta
     </h3>
-    {!esSeguimiento && (
+    {!esSeguimiento && !soloLecturaGlobal && (
       <button
         onClick={() => {
           setModoSeleccion((m) => !m);
@@ -4460,9 +4464,11 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
 
     const seleccionable = (seg.estado === "pendiente" || seg.estado === "preview") && (!opReal || vinoDelFormulario);
 
-    const soloLectura = esSeguimiento
-          ? seg.estado === "pendiente" // seguimiento no edita hasta que haya algo enviado
-          : seg.estado === "confirmado" || seg.estado === "subido"; // ventas edita libre en pendiente/preview
+    const soloLectura = soloLecturaGlobal
+          ? true // contabilidad (u otro rol de solo visualización): nunca editable
+          : esSeguimiento
+          ? seg.estado === "pendiente"
+          : seg.estado === "confirmado" || seg.estado === "subido";
 
     // Precio y total a mostrar en la card: prioriza lo que ya está
     // confirmado en el formulario de seguimiento (seg.precio_producto);

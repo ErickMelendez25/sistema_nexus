@@ -676,12 +676,14 @@ export interface TabVentasErpProps {
   usuarioActual?: string;
   /** Mapa id -> {nombre_completo, foto_perfil} de todos los usuarios de Helbot — para mostrar el avatar junto a "Rellenado por"/"Confirmado por". */
   usuariosChatMap?: Record<number, UsuarioChatMini>;
+  /** true = rol de solo lectura (ej. contabilidad) — oculta/bloquea el botón que crea una OP nueva en el ERP. */
+  soloLecturaGlobal?: boolean;
 }
 // NOTA: este componente YA NO trae sus propios datos — los recibe por
 // props desde HelbotPage, que es quien hace fetch a /erp/ventas UNA sola
 // vez y los comparte con este tab y con el panel dividido del tab
 // "Monitor" (y los mantiene al día por WebSocket vía 'ventas_erp_actualizadas').
-export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion, onRefrescar, onAbrirOps, onIniciarOps, onVerOrdenExistente, seguimientosPorOrden, detallesPorOrden, usuarioActual, usuariosChatMap }: TabVentasErpProps) {
+export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion, onRefrescar, onAbrirOps, onIniciarOps, onVerOrdenExistente, seguimientosPorOrden, detallesPorOrden, usuarioActual, usuariosChatMap, soloLecturaGlobal }: TabVentasErpProps) {
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroOcf, setFiltroOcf] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
@@ -1152,6 +1154,7 @@ const filtrosActivos = [
                 seguimientosPorOrden={seguimientosPorOrden}
                 detallesPorOrden={detallesPorOrden}
                 usuariosChatMap={usuariosChatMap}
+                soloLecturaGlobal={soloLecturaGlobal}
               />
             ))}
           </div>
@@ -1390,6 +1393,7 @@ export function CardVentaErp({
   seguimientosPorOrden,
   detallesPorOrden,
   usuariosChatMap,
+  soloLecturaGlobal,
 }: {
   v: VentaErp;
   /** true si este código de venta NO aparece en la lista de Publicadas — lo pinta el comparador del tab Monitor. */
@@ -1406,6 +1410,8 @@ export function CardVentaErp({
   detallesPorOrden?: Record<number, Record<string, DetalleSeguimientoProducto>>;
   /** Mapa id -> {nombre_completo, foto_perfil} — para mostrar el avatar junto a cada nombre. */
   usuariosChatMap?: Record<number, UsuarioChatMini>;
+  /** true = rol de solo lectura (ej. contabilidad) — bloquea la creación de OP nueva. */
+  soloLecturaGlobal?: boolean;
 }) {
   const [expandido, setExpandido] = useState(false);
   const [mostrarTodasCategorias, setMostrarTodasCategorias] = useState(false);
@@ -1635,8 +1641,10 @@ return (
       return (
         <div className="mt-2">
           <button
-            onClick={(e) => { e.stopPropagation(); onIniciarOps?.(v); }}
-            className={`w-full flex items-center justify-between gap-2 border rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+            onClick={(e) => { e.stopPropagation(); if (!soloLecturaGlobal) onIniciarOps?.(v); }}
+            disabled={soloLecturaGlobal}
+            title={soloLecturaGlobal ? "Solo lectura — no puedes crear órdenes de proveedor" : undefined}
+            className={`w-full flex items-center justify-between gap-2 border rounded-lg px-3 py-2.5 text-sm font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
               todoConfirmado
                 ? "bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700"
                 : hayAvance
