@@ -58,6 +58,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
 
 from erp_login import erp_session, ERP_API_BASE
+from datetime import datetime
 import op_seguimiento
 
 logger = logging.getLogger("helbot.ventas_router")
@@ -136,6 +137,19 @@ class AgrupacionCreateIn(BaseModel):
     ordenesCompraIds: list[int]
 
 
+
+
+def _parsear_fecha_erp(raw: str | None):
+    """Convierte el createdAt del ERP ('2026-09-03T15:48:38.067Z') a un
+    datetime que MySQL acepta directo en una columna DATETIME."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 # ============================================================
 # Ventas (Órdenes de Compra)
 # ============================================================
@@ -157,16 +171,16 @@ def crear_venta(body: VentaCreateIn):
 
     venta = r.json()
 
-    # Siembra las filas 'pendiente' de op_producto_seguimiento AQUÍ, en el
-    # momento exacto en que logística crea la orden con sus productos —
-    # así creado_en refleja la fecha real de creación de la orden, no la
-    # fecha en que alguien de ventas rellena el formulario más tarde.
+    # Siembra las filas 'pendiente' con la fecha REAL de creación de la
+    # venta en el ERP (venta['createdAt']) — no la fecha del momento en
+    # que Helbot ejecuta este INSERT.
     try:
         op_seguimiento.asegurar_filas_productos_preview(
             orden_compra_id=venta.get("id"),
             numero_ocam=venta.get("numeroOcam"),
             codigo_venta=venta.get("codigoVenta"),
             productos=[p.dict() for p in body.productos],
+            creado_en=_parsear_fecha_erp(venta.get("createdAt")),
         )
     except Exception as e:
         logger.warning(f"No se pudieron sembrar las filas de seguimiento para venta {venta.get('id')}: {e}")
@@ -199,16 +213,13 @@ def actualizar_venta(orden_compra_id: int, body: VentaCreateIn):
 
     venta = r.json()
 
-    # Mismo sembrado que en crear_venta — cubre el caso de que logística
-    # agregue un producto NUEVO a una orden que ya existía. Los productos
-    # que ya tenían fila no se tocan (ON DUPLICATE KEY solo actualiza
-    # codigo_venta, nunca creado_en).
     try:
         op_seguimiento.asegurar_filas_productos_preview(
             orden_compra_id=venta.get("id"),
             numero_ocam=venta.get("numeroOcam"),
             codigo_venta=venta.get("codigoVenta"),
             productos=[p.dict() for p in body.productos],
+            creado_en=_parsear_fecha_erp(venta.get("createdAt")),
         )
     except Exception as e:
         logger.warning(f"No se pudieron sembrar las filas de seguimiento para venta {venta.get('id')}: {e}")

@@ -370,18 +370,24 @@ def asegurar_filas_productos(op_id: int, orden_compra_id: int, numero_ocam: str 
     finally:
         conn.close()
 
-
 def asegurar_filas_productos_preview(
     orden_compra_id: int,
     numero_ocam: str | None,
     codigo_venta: str | None,
     productos: list[dict],
+    creado_en=None,
 ):
     """Crea (si no existe) una fila de seguimiento POR PRODUCTO para una
     orden de compra que TODAVÍA no tiene una OP real generada en el ERP
     (op_id = NULL). Se usa cuando el usuario hace clic en 'Generar orden
     de proveedor' y nOps == 0 — permite llenar el formulario de cada
-    producto sin depender de que exista una OP real en Railway."""
+    producto sin depender de que exista una OP real en Railway.
+
+    `creado_en`: si viene (ej. el createdAt REAL de la venta en el ERP),
+    se usa ese valor explícito en vez de dejar que MySQL le ponga el
+    CURRENT_TIMESTAMP del momento del INSERT — así la fecha de creación
+    del seguimiento refleja la fecha real en que la orden entró al ERP,
+    no el momento en que Helbot sembró la fila."""
     if not productos:
         return
     conn = get_conn()
@@ -391,23 +397,43 @@ def asegurar_filas_productos_preview(
                 codigo = p.get("codigo")
                 if not codigo:
                     continue
-                cur.execute(
-                    """
-                    INSERT INTO op_producto_seguimiento
-                        (op_id, orden_compra_id, numero_ocam, codigo_venta, producto_codigo,
-                         producto_descripcion, producto_cantidad, estado)
-                    VALUES (NULL, %s, %s, %s, %s, %s, %s, 'pendiente')
-                    ON DUPLICATE KEY UPDATE codigo_venta = VALUES(codigo_venta)
-                    """,
-                    (
-                        orden_compra_id,
-                        numero_ocam,
-                        codigo_venta,
-                        str(codigo),
-                        p.get("descripcion"),
-                        p.get("cantidad"),
-                    ),
-                )
+                if creado_en:
+                    cur.execute(
+                        """
+                        INSERT INTO op_producto_seguimiento
+                            (op_id, orden_compra_id, numero_ocam, codigo_venta, producto_codigo,
+                             producto_descripcion, producto_cantidad, estado, creado_en)
+                        VALUES (NULL, %s, %s, %s, %s, %s, %s, 'pendiente', %s)
+                        ON DUPLICATE KEY UPDATE codigo_venta = VALUES(codigo_venta)
+                        """,
+                        (
+                            orden_compra_id,
+                            numero_ocam,
+                            codigo_venta,
+                            str(codigo),
+                            p.get("descripcion"),
+                            p.get("cantidad"),
+                            creado_en,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO op_producto_seguimiento
+                            (op_id, orden_compra_id, numero_ocam, codigo_venta, producto_codigo,
+                             producto_descripcion, producto_cantidad, estado)
+                        VALUES (NULL, %s, %s, %s, %s, %s, %s, 'pendiente')
+                        ON DUPLICATE KEY UPDATE codigo_venta = VALUES(codigo_venta)
+                        """,
+                        (
+                            orden_compra_id,
+                            numero_ocam,
+                            codigo_venta,
+                            str(codigo),
+                            p.get("descripcion"),
+                            p.get("cantidad"),
+                        ),
+                    )
     finally:
         conn.close()
 
