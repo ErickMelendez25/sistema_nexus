@@ -30,14 +30,16 @@ def get_pool() -> pooling.MySQLConnectionPool:
         _pool = pooling.MySQLConnectionPool(
             pool_name="cumpleanos_web",
             pool_size=5,
-            host     = os.getenv("MYSQL_HOST",     "localhost"),
-            user     = os.getenv("MYSQL_USER",     "root"),
-            password = os.getenv("MYSQL_PASSWORD", "Erick2026#"),
-            database = os.getenv("MYSQL_DATABASE", "helbot_db"),  # <-- AJUSTA al nombre real de tu BD
+            host     = os.getenv("DB_HOST"),
+            port     = int(os.getenv("DB_PORT", "3306")),
+            user     = os.getenv("DB_USER"),
+            password = os.getenv("DB_PASSWORD"),
+            database = os.getenv("DB_NAME"),
             charset  = "utf8mb4",
         )
         logger.info("✓ Pool MySQL cumpleanos iniciado")
     return _pool
+
 
 def get_conn():
     return get_pool().get_connection()

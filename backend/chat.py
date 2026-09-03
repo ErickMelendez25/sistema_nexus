@@ -40,7 +40,7 @@ def obtener_usuarios():
         conn.close()
 
 
-@router.get("/usuarios/mini")
+@router.get("/chat/usuarios/mini")
 def usuarios_mini():
     conn = get_conn()
     try:
@@ -51,7 +51,6 @@ def usuarios_mini():
             return cur.fetchall()
     finally:
         conn.close()
-
 
 @router.get("/chat/resumen")
 def obtener_resumen_chats(usuario: UsuarioToken = Depends(obtener_usuario_actual)):
