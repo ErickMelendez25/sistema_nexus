@@ -58,6 +58,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
 
 from erp_login import erp_session, ERP_API_BASE
+import op_seguimiento
 
 logger = logging.getLogger("helbot.ventas_router")
 router = APIRouter(prefix="/erp", tags=["ventas"])
@@ -155,6 +156,21 @@ def crear_venta(body: VentaCreateIn):
         raise HTTPException(status_code=502, detail=f"Error creando la orden en el ERP: {e}")
 
     venta = r.json()
+
+    # Siembra las filas 'pendiente' de op_producto_seguimiento AQUÍ, en el
+    # momento exacto en que logística crea la orden con sus productos —
+    # así creado_en refleja la fecha real de creación de la orden, no la
+    # fecha en que alguien de ventas rellena el formulario más tarde.
+    try:
+        op_seguimiento.asegurar_filas_productos_preview(
+            orden_compra_id=venta.get("id"),
+            numero_ocam=venta.get("numeroOcam"),
+            codigo_venta=venta.get("codigoVenta"),
+            productos=[p.dict() for p in body.productos],
+        )
+    except Exception as e:
+        logger.warning(f"No se pudieron sembrar las filas de seguimiento para venta {venta.get('id')}: {e}")
+
     _avisar("venta_creada", {
         "id": venta.get("id"),
         "codigoVenta": venta.get("codigoVenta"),
@@ -182,6 +198,21 @@ def actualizar_venta(orden_compra_id: int, body: VentaCreateIn):
         raise HTTPException(status_code=502, detail=f"Error actualizando la orden en el ERP: {e}")
 
     venta = r.json()
+
+    # Mismo sembrado que en crear_venta — cubre el caso de que logística
+    # agregue un producto NUEVO a una orden que ya existía. Los productos
+    # que ya tenían fila no se tocan (ON DUPLICATE KEY solo actualiza
+    # codigo_venta, nunca creado_en).
+    try:
+        op_seguimiento.asegurar_filas_productos_preview(
+            orden_compra_id=venta.get("id"),
+            numero_ocam=venta.get("numeroOcam"),
+            codigo_venta=venta.get("codigoVenta"),
+            productos=[p.dict() for p in body.productos],
+        )
+    except Exception as e:
+        logger.warning(f"No se pudieron sembrar las filas de seguimiento para venta {venta.get('id')}: {e}")
+
     _avisar("venta_actualizada", {"id": venta.get("id"), "codigoVenta": venta.get("codigoVenta")})
     return venta
 
