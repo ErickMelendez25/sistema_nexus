@@ -521,7 +521,7 @@ def obtener_estadisticas_seguimiento() -> dict:
             cur.execute(
                 """
                 SELECT orden_compra_id, numero_ocam, codigo_venta, producto_codigo,
-                       producto_descripcion, estado,
+                       producto_descripcion, estado, creado_en,
                        rellenado_por, rellenado_en,
                        confirmado_por, confirmado_en,
                        subido_por, subido_en
