@@ -40,6 +40,19 @@ def obtener_usuarios():
         conn.close()
 
 
+@router.get("/usuarios/mini")
+def usuarios_mini():
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT username, nombre_completo, foto_perfil FROM usuarios_helbot WHERE activo = 1"
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 @router.get("/chat/resumen")
 def obtener_resumen_chats(usuario: UsuarioToken = Depends(obtener_usuario_actual)):
     """Para pintar la lista de chats como WhatsApp: último mensaje, su

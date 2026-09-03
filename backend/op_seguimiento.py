@@ -304,7 +304,14 @@ def subir_al_erp(op_id: int, subido_por: str) -> dict:
 # ============================================================
 def asegurar_filas_productos(op_id: int, orden_compra_id: int, numero_ocam: str | None, productos: list[dict]):
     """Crea una fila de seguimiento por cada producto de la OP, si no
-    existe todavía (idempotente, gracias al UNIQUE KEY op_id+codigo)."""
+    existe todavía (idempotente, gracias al UNIQUE KEY op_id+codigo).
+
+    Si el ERP asignó un producto_codigo nuevo para este producto (p.ej.
+    porque la OP se creó directo en el ERP con el código real de
+    catálogo en vez del código secuencial que tenía en Helbot), busca
+    por producto_descripcion una fila existente de esta orden y migra
+    su producto_codigo en vez de crear una fila huérfana nueva — así no
+    se pierde rellenado_por / confirmado_por / imágenes ya cargadas."""
     if not productos:
         return
     conn = get_conn()
@@ -314,7 +321,37 @@ def asegurar_filas_productos(op_id: int, orden_compra_id: int, numero_ocam: str 
                 codigo = p.get("codigo") or p.get("id")
                 if not codigo:
                     continue
-            cur.execute(
+                descripcion = p.get("descripcion")
+
+                fila_migrable = None
+                if descripcion:
+                    cur.execute(
+                        """
+                        SELECT id FROM op_producto_seguimiento
+                        WHERE orden_compra_id = %s
+                          AND producto_descripcion = %s
+                          AND producto_codigo != %s
+                        LIMIT 1
+                        """,
+                        (orden_compra_id, descripcion, str(codigo)),
+                    )
+                    fila_migrable = cur.fetchone()
+
+                if fila_migrable:
+                    cur.execute(
+                        """
+                        UPDATE op_producto_seguimiento
+                        SET producto_codigo = %s,
+                            op_id = %s,
+                            numero_ocam = %s,
+                            producto_cantidad = %s
+                        WHERE id = %s
+                        """,
+                        (str(codigo), op_id, numero_ocam, p.get("cantidad"), fila_migrable["id"]),
+                    )
+                    continue
+
+                cur.execute(
                     """
                     INSERT IGNORE INTO op_producto_seguimiento
                         (op_id, orden_compra_id, numero_ocam, producto_codigo,
@@ -326,7 +363,7 @@ def asegurar_filas_productos(op_id: int, orden_compra_id: int, numero_ocam: str 
                         orden_compra_id,
                         numero_ocam,
                         str(codigo),
-                        p.get("descripcion"),
+                        descripcion,
                         p.get("cantidad"),
                     ),
                 )
