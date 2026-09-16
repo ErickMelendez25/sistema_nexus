@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FileSpreadsheet, ShieldAlert, Tag, History, Settings2, Loader2, Boxes, Truck } from "lucide-react";
+import { FileSpreadsheet, ShieldAlert, Tag, History, Settings2, Loader2, Boxes, Truck, DollarSign } from "lucide-react";
 import { fetchConToken } from "../../helbot-shared";
 
 import ExtraccionCatalogos from "./ExtraccionCatalogos";
@@ -12,8 +12,11 @@ import MarcasConfig from "./MarcasConfig";
 import AuditoriaExtraccion from "./AuditoriaExtraccion";
 import ModificarStock from "./ModificarStock";
 import ModificarPlazo from "./ModificarPlazo";
+import OfertasCatalogos from "./OfertasCatalogos";
+import OfertasTabla from "./OfertasTabla";
+import OfertasVivoTabla from "./OfertasVivoTabla";
 
-type TabPrincipal = "extraidas" | "restringir" | "marcas" | "stock" | "plazo" | "auditoria";
+type TabPrincipal = "extraidas" | "restringir" | "marcas" | "stock" | "plazo" | "ofertas" | "auditoria";
 
 const TABS_PRINCIPALES: { valor: TabPrincipal; label: string; icon: any }[] = [
   { valor: "extraidas", label: "Proformas extraídas", icon: FileSpreadsheet },
@@ -21,6 +24,7 @@ const TABS_PRINCIPALES: { valor: TabPrincipal; label: string; icon: any }[] = [
   { valor: "marcas", label: "Proformas marcas", icon: Tag },
   { valor: "stock", label: "Modificar Stock", icon: Boxes },
   { valor: "plazo", label: "Modificar Plazo", icon: Truck },
+  { valor: "ofertas", label: "Ofertas", icon: DollarSign },
   { valor: "auditoria", label: "Auditoría", icon: History },
 ];
 
@@ -36,6 +40,7 @@ const TABS_PRINCIPALES: { valor: TabPrincipal; label: string; icon: any }[] = [
   const [tabPrincipal, setTabPrincipal] = useState<TabPrincipal>("extraidas");
   const [subTabRestringir, setSubTabRestringir] = useState<"proformas" | "configurar">("proformas");
   const [subTabMarcas, setSubTabMarcas] = useState<"proformas" | "configurar">("proformas");
+  const [subTabOfertas, setSubTabOfertas] = useState<"guardadas" | "vivo">("guardadas");
 
   const [catalogos, setCatalogos] = useState<string[]>([]);
   const [cargandoCatalogos, setCargandoCatalogos] = useState(true);
@@ -195,6 +200,39 @@ const cargarCatalogos = useCallback(async () => {
           {tabPrincipal === "stock" && <ModificarStock apiBase={apiBase} uid={uid} />}
 
           {tabPrincipal === "plazo" && <ModificarPlazo apiBase={apiBase} uid={uid} />}
+
+          {tabPrincipal === "ofertas" && (
+            <div className="space-y-3">
+              <OfertasCatalogos apiBase={apiBase} uid={uid} onEstadoChange={handleEstadoExtraccion} />
+
+              <div className="flex items-center gap-1 border-b border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setSubTabOfertas("guardadas")}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${
+                    subTabOfertas === "guardadas" ? "border-emerald-500 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <DollarSign size={14} /> Corridas guardadas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubTabOfertas("vivo")}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${
+                    subTabOfertas === "vivo" ? "border-emerald-500 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <DollarSign size={14} /> En vivo (Perú Compras)
+                </button>
+              </div>
+
+              {subTabOfertas === "guardadas" ? (
+                <OfertasTabla apiBase={apiBase} uid={uid} tick={tickExtraccion} />
+              ) : (
+                <OfertasVivoTabla apiBase={apiBase} uid={uid} tick={tickExtraccion} />
+              )}
+            </div>
+          )}
 
           {tabPrincipal === "auditoria" && <AuditoriaExtraccion apiBase={apiBase} uid={uid} tick={tickExtraccion} />}
         </div>

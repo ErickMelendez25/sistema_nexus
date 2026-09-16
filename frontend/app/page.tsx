@@ -3896,13 +3896,14 @@ const tabs = esAdmin
   // ============================================================
   // TAB 5 — Auditoría: quién envió a revisión y quién confirmó
   // ============================================================
-  interface FilaAuditoria {
+interface FilaAuditoria {
     orden_compra_id: number;
     numero_ocam: string | null;
     codigo_venta: string | null;
     producto_codigo: string;
     producto_descripcion: string | null;
     estado: "preview" | "confirmado" | "subido";
+    creado_en: string | null;
     rellenado_por: string | null;
     rellenado_en: string | null;
     confirmado_por: string | null;
@@ -4262,7 +4263,7 @@ function TabAuditoria({
         />
       ) : (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
+          <table className="w-full text-sm min-w-[1050px]">
             <thead>
               <tr
                 style={{ fontFamily: "var(--font-mono)" }}
@@ -4271,6 +4272,7 @@ function TabAuditoria({
                 <th className="px-4 py-3 font-medium">Orden / OCAM</th>
                 <th className="px-4 py-3 font-medium">Producto</th>
                 <th className="px-4 py-3 font-medium">Estado</th>
+                <th className="px-4 py-3 font-medium">Creado</th>
                 <th className="px-4 py-3 font-medium">Enviado por</th>
                 <th className="px-4 py-3 font-medium">Fecha envío</th>
                 <th className="px-4 py-3 font-medium">Confirmado por</th>
@@ -4313,6 +4315,24 @@ function TabAuditoria({
                     <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${badgeEstadoAuditoria(f.estado)}`}>
                       {f.estado}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {f.creado_en ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-6 h-6 rounded-full overflow-hidden shrink-0 border border-slate-200">
+                          <AvatarToastChat
+                            nombre={f.rellenado_por || "?"}
+                            foto={buscarFotoPorNombre(usuariosChatMap, f.rellenado_por)}
+                            tamano={24}
+                          />
+                        </div>
+                        <span style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] text-slate-500 whitespace-nowrap">
+                          {formatearFechaHora(f.creado_en)}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {f.rellenado_por ? (

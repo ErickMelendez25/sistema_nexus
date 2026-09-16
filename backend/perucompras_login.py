@@ -59,7 +59,7 @@ except ImportError as e:
 # ============================================================
 # CONFIG
 # ============================================================
-BASE_URL = "https://www.catalogos.perucompras.gob.pe"
+BASE_URL = "https://catalogos.perucompras.gob.pe"
 LOGIN_URL = BASE_URL + "/"
 KEEPALIVE_INTERVAL = 90  # segundos
 LOGIN_TIMEOUT_SEGUNDOS = 90  # si un login sigue "cargando" más de esto, se fuerza el cierre
@@ -275,6 +275,7 @@ class PeruComprasSession:
                 self.driver = driver
                 self.cookies_list = cookies
                 self.session = _session_desde_cookies(cookies)
+                logger.info("Cookies de la sesión: %s", [(c.name, c.domain) for c in self.session.cookies])
                 self.estado = "activa"
                 self._iniciar_keepalive()
                 if self.on_login_exitoso:
@@ -330,6 +331,63 @@ class PeruComprasSession:
             self.session = None
             self.estado = "desconectado"
             _limpiar_chrome_de(usuario)
+
+
+    def marcar_sesion_perdida(self, motivo: str = ""):
+        """
+        Permite que un llamador EXTERNO (por ejemplo ofertas_router, al
+        recibir de Perú Compras una pantalla de login en vez del JSON
+        esperado) reporte que la sesión ya no sirve, sin esperar hasta
+        el próximo tick del keep-alive (hasta KEEPALIVE_INTERVAL
+        segundos después). Dispara el mismo camino de relogin
+        automático que ya usa _keepalive_loop cuando su propio chequeo
+        interno falla — la diferencia es que este se entera al
+        instante, porque viene de un request real que sí falló, no de
+        un ping de prueba.
+        """
+        if self.estado != "activa":
+            return  # ya se está manejando (cargando/perdida/desconectado) — no duplicar el relogin
+        logger.warning(f"Sesión de '{self.usuario}' marcada como perdida externamente: {motivo}")
+        self.estado = "perdida"
+        threading.Thread(target=self._recuperar_tras_perdida_externa, daemon=True).start()
+
+    def _recuperar_tras_perdida_externa(self):
+        usuario_actual = self.usuario
+        if self.on_sesion_perdida:
+            try:
+                self.on_sesion_perdida(usuario_actual)
+            except Exception as e:
+                logger.warning(f"Error en callback on_sesion_perdida: {e}")
+
+        with self.login_lock:
+            try:
+                if self.driver:
+                    self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
+            self.session = None
+            if usuario_actual:
+                _limpiar_chrome_de(usuario_actual)
+
+        relogin_ok = self._relogin_sincronizado()
+        if relogin_ok:
+            if self.on_sesion_recuperada:
+                try:
+                    self.on_sesion_recuperada(usuario_actual)
+                except Exception as e:
+                    logger.warning(f"Error en callback on_sesion_recuperada: {e}")
+        else:
+            self.estado = "desconectado"
+            if usuario_actual:
+                _limpiar_chrome_de(usuario_actual)
+            if self.on_sesion_fallida:
+                try:
+                    self.on_sesion_fallida(usuario_actual)
+                except Exception as e:
+                    logger.warning(f"Error en callback on_sesion_fallida: {e}")
+
+
     def logout(self):
         self.keepalive_stop.set()
         usuario_actual = self.usuario
@@ -492,6 +550,7 @@ def _cargar_usuarios_configurados() -> dict:
 
 
 USUARIOS_PERUCOMPRAS = _cargar_usuarios_configurados()
+logger.info(f"🔑 Usuarios Perú Compras cargados: { {k: v['usuario'] for k, v in USUARIOS_PERUCOMPRAS.items()} }")
 
 
 class SesionesPeruCompras:

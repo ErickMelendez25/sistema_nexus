@@ -1,22 +1,19 @@
 """
-corregir_creado_en_historico.py
----------------------------------
-Script de UNA sola corrida: corrige retroactivamente la columna
-creado_en de op_producto_seguimiento para todas las órdenes que YA
-existen, usando el createdAt REAL de cada venta en el ERP.
+corregir_creado_en_historico.py (v2 — segura)
+------------------------------------------------
+Corrige creado_en usando el MÍNIMO entre:
+  - venta.createdAt (del ERP)
+  - rellenado_en / confirmado_en / subido_en (ya guardados en la fila)
 
-Requisitos antes de correrlo:
-  1. El backend de Helbot (main.py) debe estar CORRIENDO (ya sea local
-     o en tu VPS), porque este script reusa /erp/ventas/{id} para traer
-     el createdAt real sin tener que loguear Selenium de nuevo.
-  2. Debe haber sesión ERP activa en ese backend — si no la hay, entra
-     al frontend y dale clic al botón "Iniciar sesión" del ERP antes de
-     correr este script (o descomenta el bloque de auto-login más abajo).
+Esto evita el bug detectado: el ERP a veces "resetea" su propio
+createdAt cuando la venta se edita después de creada (PUT), lo que
+puede dejar creado_en DESPUÉS de rellenado_en/confirmado_en — un
+absurdo de auditoría. Tomando el mínimo, creado_en NUNCA queda después
+de ninguna acción ya conocida sobre esa fila.
 
 Uso:
-    python corregir_creado_en_historico.py
-    python corregir_creado_en_historico.py --api-base http://localhost:4001
-    python corregir_creado_en_historico.py --dry-run   # solo muestra qué haría, no actualiza nada
+    python corregir_creado_en_historico.py --api-base https://api.gruecolimp.com --dry-run
+    python corregir_creado_en_historico.py --api-base https://api.gruecolimp.com
 """
 
 import argparse
@@ -30,113 +27,141 @@ from db import get_conn
 API_BASE_DEFAULT = "http://localhost:4001"
 
 
-def parsear_fecha_erp(raw: str | None):
-    """'2026-09-03T15:48:38.067Z' -> datetime, o None si no se puede."""
-    if not raw:
+def parsear_fecha_erp(raw) -> datetime | None:
+    """Acepta datetime ya parseado, string ISO del ERP, o None."""
+    if raw is None:
         return None
+    if isinstance(raw, datetime):
+        return raw
     try:
         return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except Exception:
         return None
 
 
-def obtener_ordenes_a_corregir() -> list[int]:
-    """orden_compra_id distintos que ya tienen filas en
-    op_producto_seguimiento — son los candidatos a corregir."""
+def obtener_filas_a_corregir() -> list[dict]:
+    """Trae TODAS las filas (no solo orden_compra_id distintos) porque
+    cada fila puede tener su propio rellenado_en/confirmado_en/subido_en
+    y necesita su propio mínimo calculado individualmente."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT orden_compra_id FROM op_producto_seguimiento ORDER BY orden_compra_id"
+                """
+                SELECT id, orden_compra_id, producto_codigo,
+                       rellenado_en, confirmado_en, subido_en, creado_en
+                FROM op_producto_seguimiento
+                ORDER BY orden_compra_id
+                """
             )
-            filas = cur.fetchall()
-            return [f["orden_compra_id"] for f in filas]
+            return cur.fetchall()
     finally:
         conn.close()
 
 
-def actualizar_creado_en(orden_compra_id: int, nueva_fecha: datetime, dry_run: bool) -> int:
-    """Actualiza creado_en de TODAS las filas de esta orden. Devuelve
-    cuántas filas se tocaron."""
+def actualizar_creado_en_por_id(fila_id: int, nueva_fecha: datetime, dry_run: bool) -> bool:
+    if dry_run:
+        return True
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            if dry_run:
-                cur.execute(
-                    "SELECT COUNT(*) AS total FROM op_producto_seguimiento WHERE orden_compra_id = %s",
-                    (orden_compra_id,),
-                )
-                return cur.fetchone()["total"]
             cur.execute(
-                "UPDATE op_producto_seguimiento SET creado_en = %s WHERE orden_compra_id = %s",
-                (nueva_fecha, orden_compra_id),
+                "UPDATE op_producto_seguimiento SET creado_en = %s WHERE id = %s",
+                (nueva_fecha, fila_id),
             )
-            return cur.rowcount
+            return cur.rowcount > 0
     finally:
         conn.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Corrige creado_en histórico usando el createdAt real del ERP.")
-    parser.add_argument("--api-base", default=API_BASE_DEFAULT, help="URL base del backend Helbot ya corriendo")
-    parser.add_argument("--dry-run", action="store_true", help="Solo muestra qué haría, sin escribir en MySQL")
-    parser.add_argument("--espera-seg", type=float, default=0.3, help="Pausa entre requests al ERP (para no saturarlo)")
+    parser = argparse.ArgumentParser(description="Corrige creado_en tomando el mínimo entre createdAt del ERP y las fechas ya registradas.")
+    parser.add_argument("--api-base", default=API_BASE_DEFAULT)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--espera-seg", type=float, default=0.3)
     args = parser.parse_args()
 
     print(f"API base: {args.api_base}")
     print(f"Modo: {'DRY-RUN (no escribe nada)' if args.dry_run else 'REAL (va a escribir en MySQL)'}\n")
 
-    ordenes = obtener_ordenes_a_corregir()
-    print(f"Órdenes distintas a revisar: {len(ordenes)}\n")
+    filas = obtener_filas_a_corregir()
+    print(f"Filas a revisar: {len(filas)}\n")
 
-    ok = 0
+    # Caché de createdAt por orden_compra_id — para no pedir la misma
+    # venta al ERP una vez por cada producto que tenga.
+    cache_venta_created: dict[int, datetime | None] = {}
+
+    corregidas = 0
+    sin_cambio = 0
     sin_venta = 0
-    sin_fecha = 0
     errores = 0
-    filas_actualizadas_total = 0
 
-    for i, orden_compra_id in enumerate(ordenes, start=1):
+    ordenes_vistas = set()
+
+    for i, fila in enumerate(filas, start=1):
+        orden_id = fila["orden_compra_id"]
         try:
-            r = requests.get(f"{args.api_base}/erp/ventas/{orden_compra_id}", timeout=20)
-            if r.status_code == 401:
-                print("❌ Sesión ERP no activa en el backend. Inicia sesión ERP en el frontend y vuelve a correr el script.")
-                return
-            if not r.ok:
-                print(f"[{i}/{len(ordenes)}] orden {orden_compra_id}: HTTP {r.status_code}, se omite")
+            if orden_id not in cache_venta_created:
+                if orden_id not in ordenes_vistas:
+                    ordenes_vistas.add(orden_id)
+                r = requests.get(f"{args.api_base}/erp/ventas/{orden_id}", timeout=20)
+                if r.status_code == 401:
+                    print("❌ Sesión ERP no activa. Inicia sesión ERP en el frontend y vuelve a correr.")
+                    return
+                if not r.ok:
+                    cache_venta_created[orden_id] = None
+                else:
+                    venta = r.json()
+                    cache_venta_created[orden_id] = parsear_fecha_erp(venta.get("createdAt"))
+                time.sleep(args.espera_seg)
+
+            created_erp = cache_venta_created[orden_id]
+
+            candidatos = [
+                d for d in [
+                    created_erp,
+                    parsear_fecha_erp(fila.get("rellenado_en")),
+                    parsear_fecha_erp(fila.get("confirmado_en")),
+                    parsear_fecha_erp(fila.get("subido_en")),
+                ]
+                if d is not None
+            ]
+
+            if not candidatos:
                 sin_venta += 1
+                print(f"[{i}/{len(filas)}] orden {orden_id} / {fila['producto_codigo']}: sin ninguna fecha válida, se omite")
                 continue
 
-            venta = r.json()
-            created_raw = venta.get("createdAt")
-            fecha = parsear_fecha_erp(created_raw)
+            # Normaliza a naive (sin tz) para poder comparar contra
+            # datetimes de MySQL, que vienen sin tzinfo.
+            candidatos_naive = [d.replace(tzinfo=None) if d.tzinfo else d for d in candidatos]
+            fecha_correcta = min(candidatos_naive)
 
-            if not fecha:
-                print(f"[{i}/{len(ordenes)}] orden {orden_compra_id}: sin createdAt válido ({created_raw!r}), se omite")
-                sin_fecha += 1
+            actual = fila.get("creado_en")
+            if actual is not None and actual == fecha_correcta:
+                sin_cambio += 1
                 continue
 
-            filas = actualizar_creado_en(orden_compra_id, fecha, args.dry_run)
-            filas_actualizadas_total += filas
-            ok += 1
-            print(f"[{i}/{len(ordenes)}] orden {orden_compra_id}: creado_en -> {fecha.isoformat()} ({filas} fila(s))")
+            actualizar_creado_en_por_id(fila["id"], fecha_correcta, args.dry_run)
+            corregidas += 1
+            print(
+                f"[{i}/{len(filas)}] orden {orden_id} / {fila['producto_codigo']}: "
+                f"creado_en {actual} -> {fecha_correcta}"
+            )
 
         except Exception as e:
             errores += 1
-            print(f"[{i}/{len(ordenes)}] orden {orden_compra_id}: ERROR — {e}")
-
-        time.sleep(args.espera_seg)
+            print(f"[{i}/{len(filas)}] orden {orden_id} / {fila.get('producto_codigo')}: ERROR — {e}")
 
     print("\n" + "=" * 60)
     print("RESUMEN")
     print("=" * 60)
-    print(f"Órdenes corregidas correctamente : {ok}")
-    print(f"Filas de seguimiento actualizadas : {filas_actualizadas_total}")
-    print(f"Órdenes sin venta en el ERP        : {sin_venta}")
-    print(f"Órdenes sin createdAt válido       : {sin_fecha}")
-    print(f"Errores                            : {errores}")
+    print(f"Filas corregidas   : {corregidas}")
+    print(f"Filas sin cambio   : {sin_cambio}")
+    print(f"Filas sin fecha    : {sin_venta}")
+    print(f"Errores            : {errores}")
     if args.dry_run:
-        print("\n⚠️  Esto fue un DRY-RUN — nada se escribió en MySQL.")
-        print("   Corre de nuevo sin --dry-run para aplicar los cambios de verdad.")
+        print("\n⚠️  DRY-RUN — nada se escribió. Corre sin --dry-run para aplicar.")
 
 
 if __name__ == "__main__":

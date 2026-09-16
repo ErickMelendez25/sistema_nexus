@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "rea
 import {
   X, Loader2, ChevronRight, ChevronUp, ChevronDown, Truck, Package, CheckCircle2, Clock,
   AlertTriangle, Send, ArrowLeft, ImagePlus, MessageSquareText, ShieldCheck, FileText, RefreshCw, Plus,
+  Download, Eye,
 } from "lucide-react";
 import { VentaErp, OpResumen, ocamDe, codigoVentaDe, montoDe } from "./TabVentasErp";
 import { EmpresaOption, listarEmpresas, contactosDeProveedor, crearContactoProveedor, ContactoProveedor, calcularMargen } from "./erp-shared";
@@ -11,6 +12,7 @@ import { EmpresaOption, listarEmpresas, contactosDeProveedor, crearContactoProve
 import FormularioProductoModal, { VisorDocumentos, nombreDesdeUrl } from "./FormularioProductoModal";
 
 import FormularioBloqueModal from "./FormularioBloqueModal";
+import jsPDF from "jspdf";
 
 const API_BASE = process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
 
@@ -291,6 +293,161 @@ function ContactoProveedorInfo({ proveedorId }: { proveedorId: number | null }) 
         ))
       )}
     </div>
+  );
+}
+
+
+
+// ============================================================
+// Usuarios de Helbot (nombre + foto) — para mostrar "Rellenado por"
+// / "Confirmado por" con avatar en cada card de producto.
+// ============================================================
+interface UsuarioMini {
+  username: string;
+  nombre_completo?: string | null;
+  foto_perfil?: string | null;
+}
+
+function useUsuariosHelbot() {
+  const [usuarios, setUsuarios] = useState<UsuarioMini[]>([]);
+  useEffect(() => {
+    const token = localStorage.getItem("helbot_token");
+    fetch(`${API_BASE}/chat/usuarios/mini`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+      .then((r) => {
+        if (!r.ok) {
+          console.error("❌ /usuarios/mini respondió con error:", r.status, r.statusText);
+          return [];
+        }
+        return r.json();
+      })
+      .then((data) => {
+        console.log("👥 usuarios/mini cargados:", data);
+        setUsuarios(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        console.error("❌ Error consultando /usuarios/mini:", err);
+      });
+  }, []);
+  return usuarios;
+}
+
+// AJUSTA esta línea si tu foto_perfil ya viene como URL completa o si
+// se sirve desde otra ruta distinta a /archivos/.
+function urlFotoPerfil(foto?: string | null) {
+  if (!foto) return null;
+
+  const valor = String(foto).trim();
+  if (!valor) return null;
+
+  // URL absoluta
+  if (/^https?:\/\//i.test(valor)) {
+    return valor;
+  }
+
+  // Data URI
+  if (valor.startsWith("data:")) {
+    return valor;
+  }
+
+  // Ruta absoluta del backend: /archivos/..., /uploads/..., etc.
+  if (valor.startsWith("/")) {
+    return `${API_BASE}${valor}`;
+  }
+
+  // Si solo viene el nombre del archivo
+  return `${API_BASE}/archivos/${valor}`;
+}
+
+
+function AvatarUsuario({
+  usuario,
+  size = 16,
+}: {
+  usuario?: UsuarioMini | null;
+  size?: number;
+}) {
+  const nombre = usuario?.nombre_completo || usuario?.username || "?";
+  const inicial = nombre.trim().charAt(0).toUpperCase();
+  const foto = urlFotoPerfil(usuario?.foto_perfil);
+
+  const estilo = {
+    width: size,
+    height: size,
+    minWidth: size,
+  };
+
+  if (foto) {
+    return (
+      <img
+        src={foto}
+        alt={nombre}
+        style={estilo}
+        className="rounded-full object-cover border border-white shadow-sm shrink-0"
+        onError={(e) => {
+          console.error("❌ Error cargando foto de usuario:", {
+            username: usuario?.username,
+            foto_perfil: usuario?.foto_perfil,
+            url_generada: foto,
+          });
+
+          e.currentTarget.style.display = "none";
+        }}
+      />
+    );
+  }
+
+  return (
+    <span
+      style={estilo}
+      className="rounded-full bg-slate-400 text-white text-[9px] font-bold flex items-center justify-center shrink-0"
+    >
+      {inicial}
+    </span>
+  );
+}
+
+function fechaCorta(fecha?: string | null) {
+  if (!fecha) return null;
+  return new Date(fecha).toLocaleString("es-PE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function AutorBadge({
+  usuarios,
+  username,
+  fecha,
+  texto,
+  clase,
+}: {
+  usuarios: UsuarioMini[];
+  username?: string | null;
+  fecha?: string | null;
+  texto: string;
+  clase: string;
+}) {
+  if (!username) return null;
+    const usuario = usuarios.find((u) => {
+      const a = String(u.username || "").trim().toLowerCase();
+      const b = String(username || "").trim().toLowerCase();
+
+      return (
+        a === b ||
+        String(u.nombre_completo || "").trim().toLowerCase() === b
+      );
+    });
+  return (
+    <span className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-full whitespace-nowrap ${clase}`}>
+      <AvatarUsuario usuario={usuario} size={14} />
+      {texto} {usuario?.nombre_completo || username}
+      {fecha && <span className="opacity-70">· {fechaCorta(fecha)}</span>}
+    </span>
   );
 }
 
@@ -822,6 +979,7 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
   const [opSeleccionada, setOpSeleccionada] = useState<number | null>(null);
+  const [generandoPdf, setGenerandoPdf] = useState(false);
   const { proveedores, transportes, cargandoProveedores, cargandoTransportes, agregarProveedor, agregarTransporte } = useCatalogosErp();
 
   const { toasts, mostrarToast, cerrarToast } = useToasts();
@@ -932,6 +1090,417 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
   // faltan), en vez de tener que entrar a una OP específica primero.
   const modoCrear = true;
 
+  // Arma el PDF con TODOS los productos de esta OC — trae seguimientos
+  // frescos del backend (no depende del estado interno de
+  // FormularioCrearProveedor, que vive en otro componente hijo).
+  const construirPdfOps = async (): Promise<jsPDF> => {
+    const r = await fetch(`${API_BASE}/erp/ordenes/${venta.id}/productos-seguimiento`);
+    const seguimientos: any[] = r.ok ? await r.json() : [];
+
+    // Usuarios (para avatares reales en "Enviado por" / "Confirmado por")
+    const ru = await fetch(`${API_BASE}/chat/usuarios/mini`).catch(() => null);
+    const listaUsuarios: any[] = ru && ru.ok ? await ru.json() : [];
+    const mapaUsuarios = new Map<string, any>();
+    listaUsuarios.forEach((u: any) => {
+      if (u.username) mapaUsuarios.set(String(u.username).trim().toLowerCase(), u);
+      if (u.nombre_completo) mapaUsuarios.set(String(u.nombre_completo).trim().toLowerCase(), u);
+    });
+
+    // Carga una imagen remota como blob (evita el problema de CORS de
+    // <img crossOrigin>, que muchos servidores no soportan para
+    // lectura de píxeles) y la recorta en círculo con un canvas — si
+    // falla (CORS real, 404, etc.) devuelve null y se dibuja un
+    // círculo de color con la inicial en su lugar.
+    const cargarAvatarCircular = async (url: string): Promise<string | null> => {
+      try {
+        const respuesta = await fetch(url, { mode: "cors" });
+        if (!respuesta.ok) {
+          console.warn("⚠️ PDF avatar: respuesta no OK para", url, respuesta.status);
+          return null;
+        }
+        const blob = await respuesta.blob();
+        const dataUrlOriginal: string = await new Promise((resolve, reject) => {
+          const lector = new FileReader();
+          lector.onload = () => resolve(lector.result as string);
+          lector.onerror = () => reject(new Error("FileReader falló"));
+          lector.readAsDataURL(blob);
+        });
+
+        const img = new Image();
+        const cargado = new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error("Image no cargó el blob"));
+        });
+        img.src = dataUrlOriginal;
+        await cargado;
+
+        const size = 64;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(img, 0, 0, size, size);
+        return canvas.toDataURL("image/png");
+      } catch (e) {
+        console.warn("⚠️ PDF avatar: no se pudo cargar/recortar", url, e);
+        return null;
+      }
+    };
+
+
+    const cacheAvatares = new Map<string, string | null>();
+    const avatarDe = async (
+      nombreUsuario: string | null | undefined
+    ): Promise<{ dataUrl: string | null; inicial: string }> => {
+      const clave = (nombreUsuario || "").trim().toLowerCase();
+      const inicial = (nombreUsuario || "?").trim().charAt(0).toUpperCase();
+      if (!clave) return { dataUrl: null, inicial };
+      const u = mapaUsuarios.get(clave);
+      const fotoUrl = u?.foto_perfil ? urlFotoPerfil(u.foto_perfil) : null;
+      if (!fotoUrl) return { dataUrl: null, inicial };
+      if (cacheAvatares.has(fotoUrl)) return { dataUrl: cacheAvatares.get(fotoUrl)!, inicial };
+      const dataUrl = await cargarAvatarCircular(fotoUrl);
+      cacheAvatares.set(fotoUrl, dataUrl);
+      return { dataUrl, inicial };
+    };
+
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+
+    const dibujarChipAutor = async (
+      x: number,
+      yChip: number,
+      anchoChip: number,
+      texto: string,
+      nombreUsuario: string | null | undefined,
+      fecha: string | null | undefined,
+      colorFondo: [number, number, number],
+      colorTexto: [number, number, number]
+    ) => {
+      const { dataUrl, inicial } = await avatarDe(nombreUsuario);
+      const avatarSize = 14;
+      const etiqueta = `${texto}${nombreUsuario ? " " + nombreUsuario : ""}${fecha ? " · " + fechaCorta(fecha) : ""}`;
+
+      // Ajusta el tamaño de letra hacia abajo hasta que TODO el texto
+      // (incluida la fecha) quepa en una sola línea, sin truncar.
+      const anchoDisponibleTexto = anchoChip - avatarSize - 16;
+      let tamanoFuente = 7.5;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(tamanoFuente);
+      while (doc.getTextWidth(etiqueta) > anchoDisponibleTexto && tamanoFuente > 5.5) {
+        tamanoFuente -= 0.5;
+        doc.setFontSize(tamanoFuente);
+      }
+      const anchoTextoFinal = doc.getTextWidth(etiqueta);
+      const anchoChipFinal = Math.max(anchoChip, avatarSize + anchoTextoFinal + 16);
+
+      const altoChip = 20;
+      doc.setFillColor(...colorFondo);
+      doc.roundedRect(x, yChip, anchoChipFinal, altoChip, altoChip / 2, altoChip / 2, "F");
+
+      const avatarX = x + 4;
+      const avatarY = yChip + (altoChip - avatarSize) / 2;
+      if (dataUrl) {
+        doc.addImage(dataUrl, "PNG", avatarX, avatarY, avatarSize, avatarSize);
+      } else {
+        doc.setFillColor(148, 163, 184);
+        doc.circle(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, "F");
+        doc.setFontSize(7);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(255, 255, 255);
+        doc.text(inicial, avatarX + avatarSize / 2, avatarY + avatarSize / 2 + 2.5, { align: "center" });
+      }
+
+      doc.setFontSize(tamanoFuente);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...colorTexto);
+      doc.text(etiqueta, avatarX + avatarSize + 5, yChip + altoChip / 2 + 2.5);
+      doc.setTextColor(0, 0, 0);
+      doc.setFont("helvetica", "normal");
+    };
+
+    const margenX = 40;
+    let y = 50;
+    const anchoUtil = 515;
+    const finPagina = 780;
+
+    const encabezarPagina = () => {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text(`Órdenes de proveedor — ${ocamDe(venta) || `Venta #${venta.id}`}`, margenX, y);
+      y += 18;
+      if (codigoVentaDe(venta)) {
+        doc.setFontSize(10);
+        doc.setTextColor(79, 70, 229);
+        doc.text(String(codigoVentaDe(venta)), margenX, y);
+        doc.setTextColor(0, 0, 0);
+        y += 16;
+      }
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Generado: ${new Date().toLocaleString("es-PE")}`, margenX, y);
+      y += 24;
+    };
+
+    encabezarPagina();
+
+    // Mismo criterio de orden que usa la UI (productosOrdenados): las
+    // OP ya generadas van primero, ordenadas por su código; los
+    // productos sin OP real quedan al final.
+    const opDeCodigoPdf = (codigo: string) =>
+      (ops || []).find((op: any) =>
+        (op.productos || []).some((pr: any) => String(pr.codigo ?? "").trim() === codigo)
+      );
+
+    const productos = [...(venta.productos || [])].sort((a: any, b: any) => {
+      const codigoA = String(a.codigo ?? a.id ?? "").trim();
+      const codigoB = String(b.codigo ?? b.id ?? "").trim();
+      const opA: any = opDeCodigoPdf(codigoA);
+      const opB: any = opDeCodigoPdf(codigoB);
+      if (!opA && !opB) return 0;
+      if (!opA) return 1;
+      if (!opB) return -1;
+      return String(opA.codigoOp || "").localeCompare(String(opB.codigoOp || ""), undefined, { numeric: true });
+    });
+
+    let opAnteriorId: number | null = null;
+    let esPrimerGrupo = true;
+
+    for (const p of productos) {
+      const codigo = String((p as any).codigo ?? (p as any).id ?? "").trim();
+      const seg =
+        seguimientos.find((s: any) => String(s.producto_codigo).trim() === codigo) || {};
+
+      const opReal: any = (ops || []).find((op: any) =>
+        (op.productos || []).some((pr: any) => String(pr.codigo ?? "").trim() === codigo)
+      );
+      const productoErpReal = opReal
+        ? ((opReal.productos || []) as any[]).find((pr: any) => String(pr.codigo ?? "").trim() === codigo)
+        : null;
+
+      const precioMostrar =
+        seg.precio_producto != null && seg.precio_producto !== ""
+          ? Number(seg.precio_producto)
+          : productoErpReal?.precioUnitario != null
+          ? Number(productoErpReal.precioUnitario)
+          : null;
+      const cantidadMostrar = productoErpReal?.cantidad ?? (p as any).cantidad;
+      const totalMostrar =
+        precioMostrar != null
+          ? precioMostrar * (Number(cantidadMostrar) || 0)
+          : productoErpReal?.total != null
+          ? Number(productoErpReal.total)
+          : null;
+
+      const badge = badgeSeguimiento(seg.estado);
+      const esAgencia = (seg.tipo_envio || "").toUpperCase() === "AGENCIA";
+      const empresaNombre = seg.empresa_nombre || opReal?.empresa?.razonSocial || "";
+      const proveedorGrupo = opReal?.proveedor?.razonSocial || seg.proveedor_nombre || "";
+
+      // Encabezado de grupo — solo cuando cambia la OP a la que pertenece
+      if ((opReal?.id ?? null) !== opAnteriorId) {
+        opAnteriorId = opReal?.id ?? null;
+
+        // Separación clara entre un grupo de OP y el siguiente — no se
+        // aplica antes del primer grupo, para no dejar un hueco raro
+        // pegado al encabezado de la página.
+        if (!esPrimerGrupo) {
+          y += 10;
+          if (y > finPagina - 30) {
+            doc.addPage();
+            y = 50;
+            encabezarPagina();
+          } else {
+            doc.setDrawColor(226, 232, 240);
+            doc.setLineWidth(0.75);
+            doc.line(margenX, y, margenX + anchoUtil, y);
+            y += 16;
+          }
+        }
+        esPrimerGrupo = false;
+
+        if (y > finPagina - 30) {
+          doc.addPage();
+          y = 50;
+          encabezarPagina();
+        }
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(109, 40, 217);
+        const tituloGrupo = opReal
+          ? `OP ${opReal.codigoOp || `#${opReal.id}`} · ${proveedorGrupo}`
+          : "Sin orden de proveedor generada";
+
+        // Reserva espacio del badge de empresa (si hay) para que el
+        // título nunca se dibuje por debajo/encima de él, y envuelve
+        // el título en varias líneas si el nombre del proveedor es largo.
+        let anchoBadgeEmpresa = 0;
+        if (empresaNombre) {
+          doc.setFontSize(8);
+          anchoBadgeEmpresa = doc.getTextWidth(empresaNombre) + 16;
+          doc.setFontSize(10);
+        }
+        const anchoDisponibleTitulo = anchoUtil - (anchoBadgeEmpresa ? anchoBadgeEmpresa + 10 : 0);
+        const lineasTitulo = doc.splitTextToSize(tituloGrupo, anchoDisponibleTitulo);
+        doc.text(lineasTitulo, margenX, y);
+
+        if (empresaNombre) {
+          doc.setFontSize(8);
+          doc.setFillColor(238, 242, 255);
+          doc.roundedRect(margenX + anchoUtil - anchoBadgeEmpresa, y - 11, anchoBadgeEmpresa, 16, 8, 8, "F");
+          doc.setTextColor(79, 70, 229);
+          doc.text(empresaNombre, margenX + anchoUtil - anchoBadgeEmpresa / 2, y - 1, { align: "center" });
+        }
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "normal");
+        y += lineasTitulo.length * 13 + 4;
+      }
+
+      // IMPORTANTE: fijar la fuente ANTES de calcular el envoltorio de
+      // texto — splitTextToSize mide el ancho según la fuente/tamaño
+      // ACTIVOS en el momento en que se llama, no la que se use luego
+      // al dibujar. Si no se fija aquí, hereda el tamaño de un bloque
+      // anterior (título de grupo a 10pt, chip de autor a 7.5pt) y el
+      // texto calculado no coincide con lo que realmente se dibuja,
+      // desbordándose hacia la columna derecha.
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      const descripcionLineas = doc.splitTextToSize(String((p as any).descripcion || ""), 320);
+      const alturaCard = Math.max(descripcionLineas.length * 11 + 70, 96);
+
+      if (y + alturaCard > finPagina) {
+        doc.addPage();
+        y = 50;
+        encabezarPagina();
+      }
+
+      doc.setDrawColor(226, 232, 240);
+      doc.setFillColor(250, 250, 252);
+      doc.roundedRect(margenX, y, anchoUtil, alturaCard, 4, 4, "FD");
+
+      const colIzqX = margenX + 12;
+      const colDerX = margenX + 350;
+      const anchoColDer = anchoUtil - 350 - 24;
+      let yIzq = y + 18;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(String((p as any).codigo || codigo), colIzqX, yIzq);
+      yIzq += 12;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.text(descripcionLineas, colIzqX, yIzq);
+      doc.setTextColor(0, 0, 0);
+      yIzq += descripcionLineas.length * 11 + 10;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      let xTag = colIzqX;
+      const marca = (p as any).marca ? String((p as any).marca) : null;
+      if (marca) {
+        doc.text(marca, xTag, yIzq);
+        xTag += doc.getTextWidth(marca) + 16;
+      }
+      if (cantidadMostrar != null) {
+        const txtCant = `Cant: ${cantidadMostrar} ${(p as any).unidadMedida || ""}`;
+        doc.text(txtCant, xTag, yIzq);
+        xTag += doc.getTextWidth(txtCant) + 16;
+      }
+      if (precioMostrar != null) {
+        const txtPrecio = `S/ ${precioMostrar.toFixed(2)} c/u`;
+        doc.text(txtPrecio, xTag, yIzq);
+        xTag += doc.getTextWidth(txtPrecio) + 16;
+      }
+      if (totalMostrar != null) {
+        doc.setTextColor(5, 150, 105);
+        doc.text(`Total S/ ${totalMostrar.toFixed(2)}`, xTag, yIzq);
+        doc.setTextColor(0, 0, 0);
+      }
+      doc.setFont("helvetica", "normal");
+      yIzq += 16;
+
+      if (esAgencia) {
+        doc.setFontSize(8);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`Agencia: ${seg.agencia_transporte || "—"}  ·  Flete: S/ ${seg.precio_flete ?? "—"}`, colIzqX, yIzq);
+        doc.setTextColor(0, 0, 0);
+        yIzq += 13;
+      }
+
+      // ---- Columna derecha: fecha de creación, estado y autoría ----
+      const fechaCreacion = seg.creado_en || productoErpReal?.createdAt || opReal?.createdAt;
+
+      let yDer = y + 18;
+      doc.setFontSize(7.5);
+      doc.setFillColor(238, 242, 255);
+      const anchoBadgeEstado = Math.min(anchoColDer, doc.getTextWidth(badge.texto) + 18);
+      doc.roundedRect(colDerX + anchoColDer - anchoBadgeEstado, yDer - 10, anchoBadgeEstado, 15, 7.5, 7.5, "F");
+      doc.setTextColor(79, 70, 229);
+      doc.text(badge.texto, colDerX + anchoColDer - anchoBadgeEstado / 2, yDer, { align: "center" });
+      doc.setTextColor(0, 0, 0);
+      yDer += 18;
+
+      if (fechaCreacion) {
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Creado ${fechaCorta(fechaCreacion)}`, colDerX + anchoColDer, yDer, { align: "right" });
+        doc.setTextColor(0, 0, 0);
+        yDer += 16;
+      }
+
+      if (seg.rellenado_por) {
+        await dibujarChipAutor(
+          colDerX, yDer, anchoColDer,
+          "Enviado por", seg.rellenado_por, seg.rellenado_en,
+          [255, 251, 235], [180, 83, 9]
+        );
+        yDer += 26;
+      }
+      if (seg.confirmado_por) {
+        await dibujarChipAutor(
+          colDerX, yDer, anchoColDer,
+          "Confirmado por", seg.confirmado_por, seg.confirmado_en,
+          [245, 243, 255], [109, 40, 217]
+        );
+        yDer += 26;
+      }
+
+      y += alturaCard + 12;
+    }
+
+    return doc;
+  };
+  const previsualizarPdf = async () => {
+    setGenerandoPdf(true);
+    try {
+      const doc = await construirPdfOps();
+      window.open(doc.output("bloburl") as unknown as string, "_blank");
+    } catch (e) {
+      console.error("Error generando PDF:", e);
+    } finally {
+      setGenerandoPdf(false);
+    }
+  };
+
+  const descargarPdfOps = async () => {
+    setGenerandoPdf(true);
+    try {
+      const doc = await construirPdfOps();
+      doc.save(`OP_${ocamDe(venta) || venta.id}.pdf`);
+    } catch (e) {
+      console.error("Error generando PDF:", e);
+    } finally {
+      setGenerandoPdf(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-[1px]" onClick={onClose} />
@@ -965,9 +1534,27 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 shrink-0">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={previsualizarPdf}
+              disabled={generandoPdf}
+              title="Ver PDF"
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-[#4F46E5] transition-colors disabled:opacity-40"
+            >
+              {generandoPdf ? <Loader2 size={18} className="animate-spin" /> : <Eye size={18} />}
+            </button>
+            <button
+              onClick={descargarPdfOps}
+              disabled={generandoPdf}
+              title="Descargar PDF"
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-[#4F46E5] transition-colors disabled:opacity-40"
+            >
+              {generandoPdf ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -1907,6 +2494,9 @@ function DetalleOp({
   const [error, setError] = useState("");
   const [productoAbierto, setProductoAbierto] = useState<string | null>(null);
   const [forms, setForms] = useState<Record<string, FormularioProducto>>({});
+
+  const usuarios = useUsuariosHelbot();
+
   const [guardandoCodigo, setGuardandoCodigo] = useState<string | null>(null);
   const [subiendoCodigo, setSubiendoCodigo] = useState<string | null>(null);
   const [confirmandoCodigo, setConfirmandoCodigo] = useState<string | null>(null);
@@ -3316,6 +3906,8 @@ function FormularioCrearProveedor({
 
   const [seguimientos, setSeguimientos] = useState<any[]>([]);
 
+  const usuarios = useUsuariosHelbot();
+
   const [error, setError] = useState("");
 
   const [imagenesPorProducto, setImagenesPorProducto] = useState<Record<string, ImagenProducto[]>>({});
@@ -4375,8 +4967,17 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
       (op.productos || []).some((pr: any) => String(pr.codigo ?? "").trim() === codigo)
     );
 
+    if (opReal) {
+      console.log(
+        "DATOS COMPLETOS OP REAL",
+        codigo,
+        JSON.stringify(opReal, null, 2)
+      );
+    }
+
 
     const detalleOpReal = opReal ? detalleErpPorOp[opReal.id] : null;
+    
     const transporteDetalle = detalleOpReal ? (detalleOpReal.transportesAsignados || [])[0] : null;
   const evidenciaErp = detalleOpReal
   ? {
@@ -4410,10 +5011,28 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
 
 
 
+    const segPorCodigo = seguimientos.find(
+      (s: any) => String(s.producto_codigo).trim() === codigo
+    );
+    // Fallback: si el código del producto cambió en el ERP (pasó de un
+    // código numérico tipo "3" a un código real de catálogo tipo
+    // "BOLSA NEGRO" porque alguien creó la OP directo en el ERP), busca
+    // por descripción el seguimiento más avanzado — así no se pierde
+    // el rellenado_por/confirmado_por que ya existía bajo el código viejo.
+    const ordenEstado: Record<string, number> = { subido: 3, confirmado: 2, preview: 1, pendiente: 0 };
+    const segPorDescripcion = !segPorCodigo
+      ? seguimientos
+          .filter(
+            (s: any) =>
+              (s.producto_descripcion || "").trim().toLowerCase() ===
+              (p.descripcion || "").trim().toLowerCase()
+          )
+          .sort((a: any, b: any) => (ordenEstado[b.estado] ?? 0) - (ordenEstado[a.estado] ?? 0))[0]
+      : null;
+
     const seg =
-      seguimientos.find(
-        (s: any) => String(s.producto_codigo).trim() === codigo
-      ) || {
+      segPorCodigo ||
+      segPorDescripcion || {
         estado: "pendiente",
         proveedor_nombre: "",
         proveedor_telefono: "",
@@ -4423,6 +5042,24 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
         precio_flete: "",
         observaciones: "",
       };
+
+
+      const seguimientoOpReal = opReal?._seguimiento || null;
+
+      const rellenadoPorMostrar =
+        seg.rellenado_por || seguimientoOpReal?.rellenado_por || null;
+
+      const rellenadoEnMostrar =
+        seg.rellenado_en || seguimientoOpReal?.rellenado_en || null;
+
+      const confirmadoPorMostrar =
+        seg.confirmado_por || seguimientoOpReal?.confirmado_por || null;
+
+      const confirmadoEnMostrar =
+        seg.confirmado_en || seguimientoOpReal?.confirmado_en || null;
+
+      const estadoMostrar =
+        seg.estado || seguimientoOpReal?.estado || "pendiente";
 
     // Un producto marca "nuevo grupo visual" cuando cambia la OP real a
     // la que pertenece, O -si todavía no tiene OP- cuando cambia el
@@ -4604,10 +5241,29 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                           Total S/ {totalMostrar.toFixed(2)}
                         </span>
                       )}
+                 
+                      {/* Fecha de creación:
+                          - Si vino del formulario, usamos seg.creado_en.
+                          - Si fue creado directamente en ERP, usamos opReal.createdAt.
+                      */}
+                      {(seg.creado_en ||
+                        productoErpReal?.createdAt ||
+                        opReal?.createdAt) && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                          <Clock size={10} />
+                          Creado{" "}
+                          {fechaCorta(
+                            seg.creado_en ||
+                              productoErpReal?.createdAt ||
+                              opReal?.createdAt
+                          )}
+                        </span>
+                      )}
+                   
+
                     </div>
 
                 </div>
-
                 <div className="flex flex-col items-end gap-1 shrink-0">
 
                     <span className={`flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border whitespace-nowrap ${badge.clase}`}>
@@ -4624,17 +5280,27 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
                       </span>
                     )}
 
-                    {seg.estado === "preview" && seg.rellenado_por && (
-                      <span className="text-[10px] text-amber-700 font-medium whitespace-nowrap">
-                        Enviado por {seg.rellenado_por}
-                      </span>
-                    )}
-                    {(seg.estado === "confirmado" || seg.estado === "subido") && seg.confirmado_por && (
-                      <span className="text-[10px] text-violet-700 font-medium whitespace-nowrap">
-                        Confirmado por {seg.confirmado_por}
-                      </span>
+                    {/* Autoría del producto */}
+                    {rellenadoPorMostrar && (
+                      <AutorBadge
+                        usuarios={usuarios}
+                        username={rellenadoPorMostrar}
+                        fecha={rellenadoEnMostrar}
+                        texto="Enviado por"
+                        clase="bg-amber-50 text-amber-700 border border-amber-200"
+                      />
                     )}
 
+                    {(estadoMostrar === "confirmado" || estadoMostrar === "subido") &&
+                      confirmadoPorMostrar && (
+                        <AutorBadge
+                          usuarios={usuarios}
+                          username={confirmadoPorMostrar}
+                          fecha={confirmadoEnMostrar}
+                          texto="Confirmado por"
+                          clase="bg-violet-50 text-violet-700 border border-violet-200"
+                        />
+                      )}
 
                     {seg.grupo_envio_id && (
                       <button

@@ -78,8 +78,10 @@ from routers import perucompras_filtros
 from routers import perucompras_extraccion_router as perucompras_extraccion_router_mod
 from routers import perucompras_marcas_router as perucompras_marcas_router_mod
 
+
 from routers import perucompras_stock_router as perucompras_stock_router_mod
 from routers import perucompras_plazo_router as perucompras_plazo_router_mod
+from routers import ofertas_router as ofertas_router_mod
 
 
 from routers import historial_comercial as historial_comercial_mod
@@ -132,8 +134,8 @@ CORS_ORIGINS = [
     "https://gruecolimp.com",
     "http://localhost:3002",
     "http://127.0.0.1:3002",
-    "http://192.168.1.86:3002",
-    "http://192.168.18.33:3002",
+    "http://192.168.1.89:3002",
+    "http://192.168.18.12:3002",
     "http://192.168.18.139:3002",
     "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
 ]
@@ -168,6 +170,7 @@ app.include_router(perucompras_marcas_router_mod.router)
 
 app.include_router(perucompras_stock_router_mod.router)
 app.include_router(perucompras_plazo_router_mod.router)
+app.include_router(ofertas_router_mod.router)
 
 
 app.include_router(historial_comercial_mod.router)
