@@ -592,7 +592,45 @@ def confirmar_restringidos(
     return {"ok": True, "actualizados": len(exitosos), "fallidos": fallidos}
 
 
+class DescartarRestriccionIn(BaseModel):
+    ids: list[int]
+    uid: str
 
+
+@router.post("/restringidos/descartar")
+def descartar_restringidos(
+    body: DescartarRestriccionIn,
+    usuario: UsuarioToken = Depends(obtener_usuario_actual),
+):
+    """
+    Botón "Descartar": el usuario decide que esa candidata NO se debe
+    restringir (falso positivo de marca/semáforo/monto, o simplemente
+    no la quiere restringir). A diferencia de "Restringir", esto NO
+    llama a Perú Compras — solo marca estado='descartado' en MySQL
+    para que la fila salga de la lista de "Pendientes" sin tocar la
+    proforma real en Perú Compras.
+    """
+    if not body.ids:
+        raise HTTPException(400, "No se enviaron ids para descartar")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            formato = ",".join(["%s"] * len(body.ids))
+            cur.execute(
+                f"""
+                UPDATE perucompras_restringidos
+                SET estado = 'descartado'
+                WHERE id IN ({formato}) AND estado = 'pendiente'
+                """,
+                tuple(body.ids),
+            )
+            actualizados = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"ok": True, "actualizados": actualizados}
 
 
 @router.get("/kpis")
