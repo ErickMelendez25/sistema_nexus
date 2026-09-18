@@ -802,9 +802,9 @@ def rellenar_productos_en_bloque(
     for p in productos:
         flete = float(p.get("precio_flete") or 0)
         desc = p.get("descripcion") or p["codigo"]
-        lineas.append(f"• {desc} ({p['codigo']}): flete S/ {flete:.2f}")
+        lineas.append(f"• {desc} ({p['codigo']}): flete S/ {flete}")
     total_flete_grupo = sum(float(p.get("precio_flete") or 0) for p in productos)
-    lineas.append(f"— TOTAL FLETE DEL ENVÍO: S/ {total_flete_grupo:.2f}")
+    lineas.append(f"— TOTAL FLETE DEL ENVÍO: S/ {total_flete_grupo}")
     desglose_automatico = "\n".join(lineas)
 
     nota_usuario = (datos_compartidos.get("observaciones_transporte") or "").strip()
