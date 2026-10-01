@@ -49,7 +49,7 @@ export default function OfertasCatalogos({
   const [conteoOcupado, setConteoOcupado] = useState(false);
 
   useEffect(() => {
-    if (!uid || !acuerdoSel || !catalogoSel) {
+    if (!uid || !acuerdoSel || !catalogoSel || !categoriaSel) {
       setTotalVivo(null);
       setConteoOcupado(false);
       return;

@@ -114,14 +114,15 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
   };
 
   const cargarVivo = useCallback(async () => {
-    if (!uid || !catalogoSel) {
+    if (!uid || !categoriaSel) {
       setProductos([]);
+      setCargando(false);
       return;
     }
     setCargando(true);
     setError("");
 
-    
+
     const params = new URLSearchParams({ uid });
     if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
     if (catalogoSel) params.set("n_catalogo", catalogoSel);
@@ -133,7 +134,7 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
     // fallar por un corte de red transitorio. En vez de mostrar el error
     // crudo al primer intento, probamos hasta 3 veces con espera
     // creciente antes de rendirnos de verdad.
-    const MAX_INTENTOS = 3;
+    const MAX_INTENTOS = 1;
     let ultimoError = "";
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       try {
@@ -483,7 +484,7 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
                 <tr>
                   <td colSpan={12} className="text-center py-10 text-slate-400">
                     {productos.length === 0
-                      ? "Elegí un filtro (o dejalo en \"todos\") para traer productos en vivo."
+                      ? "Elegí acuerdo, catálogo y categoría para traer productos en vivo."
                       : "No hay filas en esta página."}
                   </td>
                 </tr>
