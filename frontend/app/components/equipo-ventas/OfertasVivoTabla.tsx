@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Loader2, AlertTriangle, CheckCircle2, Save, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { fetchConToken } from "../../helbot-shared";
@@ -42,6 +42,8 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
   const [pagina, setPagina] = useState(1);
+  const [progreso, setProgreso] = useState("");
+  const cargaId = useRef(0);
 
   // valores que el usuario está tipeando, por id
   const [borrador, setBorrador] = useState<Record<number, string>>({});
@@ -113,72 +115,90 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
     setPagina(1);
   };
 
-  const cargarVivo = useCallback(async () => {
-    if (!uid || !categoriaSel) {
-      setProductos([]);
-      setCargando(false);
-      return;
-    }
-    setCargando(true);
-    setError("");
-
-
-    const params = new URLSearchParams({ uid });
-    if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
-    if (catalogoSel) params.set("n_catalogo", catalogoSel);
-    if (categoriaSel) params.set("n_categoria", categoriaSel);
-    params.set("acuerdo_txt", acuerdos.find((a) => a.value === acuerdoSel)?.text ?? "");
-    params.set("catalogo_txt", catalogos.find((c) => c.value === catalogoSel)?.text ?? "");
-    params.set("categoria_txt", categorias.find((c) => c.value === categoriaSel)?.text ?? "");
-    const url = `${apiBase}/perucompras/ofertas/vivo?${params.toString()}`;
-
-    // Reintenta automáticamente: si hay una búsqueda de precios máximos
-    // corriendo, /vivo puede tardar y devolver 504 (ver backend) o
-    // fallar por un corte de red transitorio. En vez de mostrar el error
-    // crudo al primer intento, probamos hasta 3 veces con espera
-    // creciente antes de rendirnos de verdad.
-    const MAX_INTENTOS = 1;
-    let ultimoError = "";
-    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-      try {
-        const r = await fetchConToken(url);
-        if (!r.ok) {
-          if (r.status === 504 && intento < MAX_INTENTOS) {
-            ultimoError = "Perú Compras está ocupado (hay una búsqueda corriendo) — reintentando...";
-            setError(ultimoError);
-            await new Promise((res) => setTimeout(res, 2000 * intento));
-            continue;
-          }
-          throw new Error(`Error HTTP ${r.status}`);
-        }
-        const data = await r.json();
-        const filas: ProductoVivo[] = Array.isArray(data.productos) ? data.productos : [];
-        setProductos(filas);
-        setPagina(1);
-        setSeleccionados(new Set());
-        const inicial: Record<number, string> = {};
-        filas.forEach((f) => {
-          inicial[f.id_catalogo_producto] = f.precio_manual_bd !== null ? String(f.precio_manual_bd) : "";
-        });
-        setBorrador(inicial);
-        setError("");
+  const cargarVivo = useCallback(
+    async (refrescar = false) => {
+      if (!uid || !acuerdoSel || !catalogoSel || !categoriaSel) {
+        setProductos([]);
         setCargando(false);
+        setProgreso("");
         return;
-      } catch (e) {
-        ultimoError = e instanceof Error ? e.message : "Error cargando datos en vivo";
-        if (intento < MAX_INTENTOS) {
-          setError(`${ultimoError} — reintentando...`);
-          await new Promise((res) => setTimeout(res, 2000 * intento));
-        }
       }
-    }
-    setError(ultimoError);
-    setProductos([]);
-    setCargando(false);
-  }, [apiBase, uid, acuerdoSel, catalogoSel, categoriaSel, acuerdos, catalogos, categorias]);
+      const miId = ++cargaId.current;
+      setCargando(true);
+      setError("");
+      setProgreso("Iniciando...");
+
+      const base = new URLSearchParams({
+        uid,
+        n_acuerdo: acuerdoSel,
+        n_catalogo: catalogoSel,
+        n_categoria: categoriaSel,
+        acuerdo_txt: acuerdos.find((a) => a.value === acuerdoSel)?.text ?? "",
+        catalogo_txt: catalogos.find((c) => c.value === catalogoSel)?.text ?? "",
+        categoria_txt: categorias.find((c) => c.value === categoriaSel)?.text ?? "",
+      });
+
+      let primera = true;
+      let fallos = 0;
+      while (miId === cargaId.current) {
+        try {
+          const p = new URLSearchParams(base.toString());
+          if (primera) {
+            p.set("inicio", "true");
+            if (refrescar) p.set("refrescar", "true");
+          }
+          primera = false;
+          const r = await fetchConToken(`${apiBase}/perucompras/ofertas/vivo-carga?${p.toString()}`);
+          if (!r.ok) throw new Error(`Error HTTP ${r.status}`);
+          const data = await r.json();
+          if (miId !== cargaId.current) return;
+          fallos = 0;
+
+          if (data.estado === "listo") {
+            const filas: ProductoVivo[] = Array.isArray(data.productos) ? data.productos : [];
+            setProductos(filas);
+            setPagina(1);
+            setSeleccionados(new Set());
+            const inicial: Record<number, string> = {};
+            filas.forEach((f) => {
+              inicial[f.id_catalogo_producto] = f.precio_manual_bd !== null ? String(f.precio_manual_bd) : "";
+            });
+            setBorrador(inicial);
+            setError("");
+            setProgreso("");
+            setCargando(false);
+            return;
+          }
+          if (data.estado === "error") {
+            setError(data.error || "Error cargando datos en vivo");
+            setProductos([]);
+            setProgreso("");
+            setCargando(false);
+            return;
+          }
+          setProgreso(data.total ? `Cargando ${data.cargados} de ${data.total}...` : "Cargando...");
+        } catch (e) {
+          if (miId !== cargaId.current) return;
+          fallos++;
+          if (fallos >= 3) {
+            setError(e instanceof Error ? e.message : "Error cargando datos en vivo");
+            setProductos([]);
+            setProgreso("");
+            setCargando(false);
+            return;
+          }
+        }
+        await new Promise((res) => setTimeout(res, 1500));
+      }
+    },
+    [apiBase, uid, acuerdoSel, catalogoSel, categoriaSel, acuerdos, catalogos, categorias]
+  );
 
   useEffect(() => {
     cargarVivo();
+    return () => {
+      cargaId.current += 1; // corta el polling si cambias de filtro o sales del tab
+    };
   }, [cargarVivo, tick]);
 
   const guardarPrecio = async (fila: ProductoVivo) => {
@@ -405,8 +425,17 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
           </button>
         )}
 
-        <span className="text-xs text-slate-500 ml-auto">
-          {cargando ? "Consultando Perú Compras..." : `${productosFiltrados.length} producto(s) encontrados`}
+        <span className="text-xs text-slate-500 ml-auto flex items-center gap-2">
+          {cargando ? progreso || "Consultando Perú Compras..." : `${productosFiltrados.length} producto(s) encontrados`}
+          {categoriaSel && !cargando && (
+            <button
+              type="button"
+              onClick={() => cargarVivo(true)}
+              className="underline text-slate-400 hover:text-slate-600"
+            >
+              Refrescar
+            </button>
+          )}
         </span>
       </div>
 

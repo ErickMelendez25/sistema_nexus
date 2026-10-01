@@ -46,6 +46,7 @@ import logging
 import json
 import re
 import time
+import threading
 import concurrent.futures
 import requests as _requests_lib_check  # noqa: F401 — solo para verificar disponibilidad si _probar_precio la necesita
 from datetime import datetime
@@ -1041,6 +1042,158 @@ def _recolectar_productos_directo(
         }
         for fila in filas
     ]
+
+
+
+# --- /vivo-carga: descarga en background + polling --------------------------
+_cache_vivo: dict = {}
+_cache_vivo_mutex = threading.Lock()
+TTL_CACHE_VIVO = 600   # segundos que dura una descarga en caché
+PAGINA_VIVO = 100      # filas por request a Perú Compras
+
+
+def _pagina_productos(session, n_acuerdo, n_catalogo, n_categoria, start, length):
+    form = {
+        "draw": "1", **_columnas_datatable(),
+        "order[0][column]": "0", "order[0][dir]": "asc",
+        "start": str(start), "length": str(length),
+        "search[value]": "", "search[regex]": "false",
+        "N_Acuerdo": n_acuerdo, "N_Catalogo": n_catalogo, "N_Categoria": n_categoria,
+        "C_Descripcion": "",
+    }
+    ultimo_error = None
+    for intento in range(3):
+        try:
+            resp = session.post(
+                URL_LISTA_PRODUCTOS, data=form,
+                headers={"X-Requested-With": "XMLHttpRequest"}, timeout=60,
+            )
+            cuerpo = _json_o_falla(resp, f"Listar productos (start={start})")
+            return cuerpo.get("data", []), int(cuerpo.get("recordsTotal", 0))
+        except _requests_lib.exceptions.RequestException as e:
+            ultimo_error = e
+            time.sleep(2 * (intento + 1))
+    raise ultimo_error
+
+
+def _job_vivo(clave, uid, pc_session, n_acuerdo, n_catalogo, n_categoria, txt_acuerdo, txt_catalogo, txt_categoria):
+    entrada = _cache_vivo[clave]
+    ya_pausado = _estado_ofertas["corriendo"]
+    m = monitor_de(uid)
+    if m and not ya_pausado:
+        m.pausar()
+    try:
+        start = 0
+        while True:
+            with pc_session.request_lock:
+                filas, total = _pagina_productos(
+                    pc_session.session, n_acuerdo, n_catalogo, n_categoria, start, PAGINA_VIVO
+                )
+            entrada["total"] = total
+            for fila in filas:
+                entrada["productos"].append({
+                    "id_catalogo_producto": fila["N_CatalogoProducto"],
+                    "descripcion": fila.get("C_Descripcion", ""),
+                    "moneda": fila.get("C_MonedaOfertada", "PEN"),
+                    "n_acuerdo": n_acuerdo,
+                    "acuerdo": txt_acuerdo or n_acuerdo,
+                    "n_catalogo": n_catalogo,
+                    "catalogo": txt_catalogo or n_catalogo,
+                    "n_categoria": n_categoria,
+                    "categoria": txt_categoria or n_categoria,
+                    "estado_actual": fila.get("C_Estado", ""),
+                    "precio_actual": fila.get("N_PrecioOfertado"),
+                })
+            entrada["cargados"] = len(entrada["productos"])
+            start += PAGINA_VIVO
+            if not filas or start >= total:
+                break
+            time.sleep(0.05)  # deja que otros tomen el lock entre páginas
+        entrada["actualizado"] = time.time()
+        entrada["estado"] = "listo"
+    except RespuestaPeruComprasInvalida as e:
+        logger.warning("Respuesta inválida de Perú Compras en /vivo-carga (uid=%s): %s", uid, e)
+        pc_session.marcar_sesion_perdida(motivo=f"/vivo-carga recibió respuesta inválida: {e}")
+        entrada["error"] = "La sesión con Perú Compras se cayó, se está reconectando. Reintentá en unos segundos."
+        entrada["estado"] = "error"
+    except Exception as e:
+        logger.exception("Error en _job_vivo")
+        entrada["error"] = f"{type(e).__name__}: {e}"
+        entrada["estado"] = "error"
+    finally:
+        if m and not ya_pausado:
+            m.reanudar()
+
+
+def _mezclar_manuales(productos: list[dict]) -> list[dict]:
+    manuales = _obtener_precios_manual([p["id_catalogo_producto"] for p in productos])
+    salida = []
+    for p in productos:
+        q = dict(p)
+        man = manuales.get(p["id_catalogo_producto"])
+        q["precio_manual_bd"] = man["precio_unitario"] if man else None
+        q["precio_manual_aceptado"] = bool(man["aceptado_perucompras"]) if man else None
+        q["precio_manual_actualizado_en"] = man["actualizado_en"].isoformat() if man else None
+        q["precio_manual_actualizado_por"] = man["actualizado_por"] if man else None
+        q["enviado_en"] = man["enviado_en"].isoformat() if man and man["enviado_en"] else None
+        q["enviado_por"] = man["enviado_por"] if man else None
+        q["envio_error"] = man["envio_error"] if man else None
+        salida.append(q)
+    return salida
+
+
+@router.get("/vivo-carga")
+def vivo_carga(
+    uid: str,
+    n_acuerdo: str,
+    n_catalogo: str,
+    n_categoria: str,
+    acuerdo_txt: str = "",
+    catalogo_txt: str = "",
+    categoria_txt: str = "",
+    inicio: bool = False,
+    refrescar: bool = False,
+    usuario: UsuarioToken = Depends(obtener_usuario_actual),
+):
+    pc_session = perucompras_sesiones.sesion(uid)
+    if pc_session is None or not pc_session.autenticado or pc_session.session is None:
+        raise HTTPException(401, "No hay sesión activa de Perú Compras para este usuario")
+
+    clave = (uid, n_acuerdo, n_catalogo, n_categoria)
+    with _cache_vivo_mutex:
+        entrada = _cache_vivo.get(clave)
+        vencida = bool(entrada) and entrada["estado"] == "listo" and (time.time() - entrada["actualizado"] > TTL_CACHE_VIVO)
+        reiniciar = (
+            entrada is None
+            or vencida
+            or (inicio and entrada["estado"] == "error")
+            or (refrescar and entrada["estado"] != "cargando")
+        )
+        if reiniciar:
+            entrada = {
+                "estado": "cargando", "productos": [], "total": 0,
+                "cargados": 0, "error": None, "actualizado": time.time(),
+            }
+            _cache_vivo.pop(clave, None)
+            _cache_vivo[clave] = entrada
+            threading.Thread(
+                target=_job_vivo,
+                args=(clave, uid, pc_session, n_acuerdo, n_catalogo, n_categoria, acuerdo_txt, catalogo_txt, categoria_txt),
+                daemon=True,
+            ).start()
+        # limpieza: máximo 20 descargas en memoria
+        for k in list(_cache_vivo)[:-20]:
+            if _cache_vivo[k]["estado"] != "cargando":
+                del _cache_vivo[k]
+
+    resp = {
+        "estado": entrada["estado"], "total": entrada["total"],
+        "cargados": entrada["cargados"], "error": entrada["error"],
+    }
+    if entrada["estado"] == "listo":
+        resp["productos"] = _mezclar_manuales(entrada["productos"])
+    return resp
+
 
 @router.get("/vivo")
 def ofertas_en_vivo(
