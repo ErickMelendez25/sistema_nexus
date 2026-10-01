@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { DollarSign, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { DollarSign, Loader2, CheckCircle2, AlertTriangle, X } from "lucide-react";
 
 import { fetchConToken } from "../../helbot-shared";
 
@@ -14,6 +14,7 @@ interface EstadoOfertas {
   terminado_en: string | null;
   error: string | null;
   run_id: number | null;
+  cancelado?: boolean;
 }
 
 interface Opcion {
@@ -43,6 +44,10 @@ export default function OfertasCatalogos({
   const [cargandoOpciones, setCargandoOpciones] = useState(false);
   const [saltarExistentes, setSaltarExistentes] = useState(true);
   const [omitirPropuesta, setOmitirPropuesta] = useState(true);
+  const [precioMinTxt, setPrecioMinTxt] = useState("");
+  const [precioMaxTxt, setPrecioMaxTxt] = useState("");
+  const [errorInicio, setErrorInicio] = useState("");
+  const [cancelando, setCancelando] = useState(false);
 
 
   const [totalVivo, setTotalVivo] = useState<number | null>(null);
@@ -164,6 +169,18 @@ export default function OfertasCatalogos({
   );
 
   const iniciarBusqueda = async () => {
+    setErrorInicio("");
+    const min = precioMinTxt.trim() === "" ? null : parseFloat(precioMinTxt.replace(",", "."));
+    const max = precioMaxTxt.trim() === "" ? null : parseFloat(precioMaxTxt.replace(",", "."));
+    if ((min !== null && (Number.isNaN(min) || min <= 0)) || (max !== null && (Number.isNaN(max) || max <= 0))) {
+      setErrorInicio("El precio mínimo y el máximo deben ser números mayores que 0 (o déjalos vacíos).");
+      return;
+    }
+    if (min !== null && max !== null && min >= max) {
+      setErrorInicio("El precio mínimo debe ser menor que el precio máximo.");
+      return;
+    }
+
     setLanzando(true);
     onEstadoChange?.(true);
     try {
@@ -175,13 +192,42 @@ export default function OfertasCatalogos({
       if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
       if (catalogoSel) params.set("n_catalogo", catalogoSel);
       if (categoriaSel) params.set("n_categoria", categoriaSel);
-      await fetchConToken(`${apiBase}/perucompras/ofertas/ejecutar?${params.toString()}`, { method: "POST" });
-      intervalo.current = setInterval(consultarEstado, 3000);
+      if (min !== null) params.set("precio_min", String(min));
+      if (max !== null) params.set("precio_max", String(max));
+
+      const r = await fetchConToken(`${apiBase}/perucompras/ofertas/ejecutar?${params.toString()}`, { method: "POST" });
+      if (!r.ok) {
+        let detalle = `Error HTTP ${r.status}`;
+        try {
+          const d = await r.json();
+          if (d?.detail) detalle = String(d.detail);
+        } catch {}
+        setErrorInicio(detalle);
+        onEstadoChange?.(false);
+        return;
+      }
+      if (!intervalo.current) intervalo.current = setInterval(consultarEstado, 3000);
       await consultarEstado();
     } finally {
       setLanzando(false);
     }
   };
+
+  const cancelarBusqueda = async () => {
+    setCancelando(true);
+    try {
+      await fetchConToken(`${apiBase}/perucompras/ofertas/cancelar`, { method: "POST" });
+      if (!intervalo.current) intervalo.current = setInterval(consultarEstado, 3000);
+      await consultarEstado();
+    } catch {
+      setCancelando(false);
+    }
+  };
+
+  // El botón vuelve a la normalidad cuando el backend confirma que ya paró
+  useEffect(() => {
+    if (estado && !estado.corriendo) setCancelando(false);
+  }, [estado]);
 
   const corriendo = estado?.corriendo || lanzando;
 
@@ -249,6 +295,30 @@ export default function OfertasCatalogos({
           />
           Omitir productos en PROPUESTA
         </label>
+
+        <div className="flex items-center gap-1">
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="Precio mín."
+            value={precioMinTxt}
+            onChange={(e) => setPrecioMinTxt(e.target.value)}
+            disabled={corriendo}
+            title="Opcional. La búsqueda NO probará precios por debajo de este valor. Vacío = empieza desde 0.10"
+            className="w-24 text-xs border border-slate-200 rounded-md px-2 py-1.5 disabled:opacity-50"
+          />
+          <span className="text-xs text-slate-400">–</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="Techo máx."
+            value={precioMaxTxt}
+            onChange={(e) => setPrecioMaxTxt(e.target.value)}
+            disabled={corriendo}
+            title="Opcional. La búsqueda NO probará ni reportará precios por encima de este valor. Vacío = techo de 500"
+            className="w-24 text-xs border border-slate-200 rounded-md px-2 py-1.5 disabled:opacity-50"
+          />
+        </div>
       </div>
 
       <p className="text-[11px] leading-snug text-slate-400">
@@ -266,6 +336,19 @@ export default function OfertasCatalogos({
         )}
       </p>
 
+      <p className="text-[11px] leading-snug text-slate-400">
+        <strong className="text-slate-500">Rango de precios (opcional):</strong> la búsqueda solo prueba valores
+        entre el mínimo y el techo máximo. Mínimo vacío = parte desde 0.10. Máximo vacío = techo de 500. Puedes
+        llenar solo uno de los dos. Ej.: mín 300 y máx 1500 para productos de ~1000. Si en ese rango Perú Compras
+        no acepta nada, el producto queda como <strong>sin_rango_encontrado</strong>.
+      </p>
+
+      {errorInicio && (
+        <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2">
+          <AlertTriangle size={13} /> {errorInicio}
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -276,6 +359,18 @@ export default function OfertasCatalogos({
           {corriendo ? <Loader2 size={15} className="animate-spin" /> : <DollarSign size={15} />}
           {corriendo ? "Buscando precios máximos..." : "Buscar precios máximos"}
         </button>
+
+        {corriendo && (
+          <button
+            type="button"
+            onClick={cancelarBusqueda}
+            disabled={cancelando || !estado?.corriendo}
+            className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg px-3 py-1.5 disabled:opacity-40 transition-colors"
+          >
+            <X size={14} />
+            {cancelando ? "Cancelando..." : "Cancelar búsqueda"}
+          </button>
+        )}
 
         {cargandoTotal ? (
           <span className="text-xs text-slate-500">Contando...</span>
@@ -291,6 +386,11 @@ export default function OfertasCatalogos({
               <span>
                 {estado.producto_actual ? `Producto: ${estado.producto_actual} · ` : ""}
                 {estado.productos_completados}/{estado.total_productos} producto(s)
+              </span>
+            ) : estado.cancelado ? (
+              <span className="flex items-center gap-1 text-amber-600">
+                <AlertTriangle size={12} /> Búsqueda cancelada: {estado.productos_completados} producto(s)
+                procesado(s) antes de cancelar
               </span>
             ) : estado.error ? (
               <span className="flex items-center gap-1 text-red-600">

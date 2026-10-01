@@ -124,7 +124,21 @@ _estado_ofertas = {
     "terminado_en": None,
     "error": None,
     "run_id": None,
+    "cancelado": False,
 }
+
+# Bandera para cancelar una corrida en curso. La pone /cancelar y la lee
+# _verificar_cancelacion() entre request y request de la búsqueda.
+_cancelar_ofertas = threading.Event()
+
+
+class CorridaCancelada(Exception):
+    """Se levanta cuando el usuario pidió cancelar la búsqueda en curso."""
+
+
+def _verificar_cancelacion():
+    if _cancelar_ofertas.is_set():
+        raise CorridaCancelada()
 
 
 # --- descubrimiento de acuerdos (HTML) --------------------------------------
@@ -426,98 +440,101 @@ def _confirmar_precio_final(pc_session, id_producto: int, moneda: str, precio: f
 
 
 
-def _barrido_creciente(pc_session, id_producto: int, moneda: str, factor: float, techo: float) -> tuple[Optional[float], int]:
+def _barrido_creciente(
+    pc_session, id_producto: int, moneda: str, factor: float, inicio: float, techo: float
+) -> tuple[Optional[float], int]:
     """
-    Prueba valores empezando en PRECIO_INICIAL, multiplicando por `factor`
-    en cada paso, hasta llegar a `techo` o encontrar el primer valor
-    aceptado. Devuelve (valor_aceptado_o_None, intentos_usados). Es el
-    "un nivel" de la cascada de resolución — se llama con factores cada
-    vez más finos hasta que alguno encuentre algo.
+    Prueba valores empezando en `inicio`, multiplicando por `factor` en cada
+    paso, hasta llegar a `techo` o encontrar el primer valor aceptado.
+    Devuelve (valor_aceptado_o_None, intentos_usados).
     """
     intentos = 0
-    valor = PRECIO_INICIAL
+    valor = inicio
     while valor < techo:
+        _verificar_cancelacion()
         intentos += 1
         if _probar_precio(pc_session, id_producto, moneda, valor):
             return valor, intentos
-        valor = round(valor * factor, 2)
+        siguiente = round(valor * factor, 2)
+        # Con valores chicos y factores finos (0.10 * 1.03 = 0.103 -> 0.10) el
+        # redondeo dejaba el valor igual y el bucle probaba el mismo precio
+        # para siempre. Garantizamos avanzar al menos 1 céntimo.
+        if siguiente <= valor:
+            siguiente = round(valor + 0.01, 2)
+        valor = siguiente
     return None, intentos
 
 
-def _encontrar_precio_maximo(pc_session, id_producto: int, moneda: str) -> ResultadoBusqueda:
+def _encontrar_precio_maximo(
+    pc_session,
+    id_producto: int,
+    moneda: str,
+    precio_min: Optional[float] = None,
+    precio_max: Optional[float] = None,
+) -> ResultadoBusqueda:
     """
-    Busca el máximo aceptado por Perú Compras, pero NUNCA fuera de
-    [0, PRECIO_MAXIMO_TECHO] — ni para probar valores, ni para reportar
-    un resultado.
+    Busca el máximo aceptado por Perú Compras SOLO dentro de [precio_min, precio_max].
+    Sin precio_min parte de PRECIO_INICIAL (0.10); sin precio_max el tope es
+    PRECIO_MAXIMO_TECHO. Nunca prueba ni reporta valores fuera de ese rango.
 
-    FASE 1 (encontrar CUALQUIER valor aceptado): avanza con pasos de
-    +10% (FACTOR_CRECIMIENTO_FASE1) en vez de duplicar, porque Perú
-    Compras parece validar una banda [piso, techo] alrededor de un
-    precio de referencia (ver nota en ERROR_MARKERS) — con pasos
-    grandes (x2) se puede saltar de un valor rechazado por BAJO directo
-    a uno rechazado por ALTO sin nunca tocar la banda válida en el medio.
-    Con +10% es mucho más difícil que eso pase.
-
-    FASE 2 (encontrar el TECHO real, una vez que ya sabemos que hay un
-    valor válido): acá sí conviene ir rápido (x2), porque ya estamos
-    DENTRO de la banda y solo buscamos la primera vez que nos pasamos
-    del límite superior — no hay riesgo de "saltarnos" nada porque
-    partimos de un punto ya confirmado como válido.
-
-    FASE 3: bisección normal para afinar el techo exacto.
+    Fase 1: cascada de barridos crecientes desde el mínimo hasta el primer aceptado.
+    Fase 2: duplicar desde ese punto hasta el primer rechazo (o el techo).
+    Fase 3: bisección para afinar.
     """
+    inicio = precio_min if precio_min is not None else PRECIO_INICIAL
+    techo = precio_max if precio_max is not None else PRECIO_MAXIMO_TECHO
+
     intentos = 1
     deteccion_ok, texto_canario = _verificar_deteccion_funciona(pc_session, id_producto, moneda)
+    aviso = ""
     if not deteccion_ok:
-        return ResultadoBusqueda(
-            None, intentos, "deteccion_no_confiable",
-            f"Perú Compras ACEPTÓ un precio de prueba absurdo ({VALOR_CANARIO_INVALIDO:.2f}) para este producto. "
-            f"Esto indica que el mensaje real de rechazo de este catálogo/producto no coincide con ninguno de los "
-            f"ERROR_MARKERS conocidos {ERROR_MARKERS}, así que la búsqueda normal terminaría trepando directo hasta "
-            f"el techo de seguridad sin encontrar un máximo real. Fragmento de la respuesta de Perú Compras para "
-            f"ajustar ERROR_MARKERS: {texto_canario!r}",
+        # Ya NO abortamos: seguimos con la búsqueda y dejamos el aviso en detalle.
+        aviso = (
+            f"AVISO: Perú Compras ACEPTÓ un precio de prueba absurdo ({VALOR_CANARIO_INVALIDO:.2f}). "
+            f"O este producto no tiene límite superior en el portal, o su mensaje de rechazo no coincide "
+            f"con ERROR_MARKERS. Respuesta cruda: {texto_canario[:200]!r}"
         )
 
-    lo: Optional[float] = None
-    factor_que_encontro = None
+    def con_aviso(texto: str) -> str:
+        return f"{texto} {aviso}".strip()
 
+    lo: Optional[float] = None
     for factor in FACTORES_CASCADA_FASE1:
-        candidato, usados = _barrido_creciente(pc_session, id_producto, moneda, factor, PRECIO_MAXIMO_TECHO)
+        candidato, usados = _barrido_creciente(pc_session, id_producto, moneda, factor, inicio, techo)
         intentos += usados
         if candidato is not None:
             lo = candidato
-            factor_que_encontro = factor
             break
 
     if lo is None:
-        # Ni siquiera el nivel más fino de la cascada (1.03x) encontró un
-        # valor aceptado por debajo del techo — probamos el techo mismo
-        # como último recurso antes de rendirnos.
+        _verificar_cancelacion()
         intentos += 1
-        if _probar_precio(pc_session, id_producto, moneda, PRECIO_MAXIMO_TECHO):
+        if _probar_precio(pc_session, id_producto, moneda, techo):
             return ResultadoBusqueda(
-                PRECIO_MAXIMO_TECHO, intentos, "techo_seguridad",
-                f"Perú Compras acepta valores hasta el techo de seguridad ({PRECIO_MAXIMO_TECHO:.2f}); se usa el techo como máximo coherente.",
+                techo, intentos, "techo_seguridad",
+                con_aviso(f"Perú Compras acepta valores hasta el techo ({techo:.2f}); se usa el techo como máximo."),
             )
         return ResultadoBusqueda(
             None, intentos, "sin_rango_encontrado",
-            f"Ningún valor probado fue aceptado, ni siquiera con la cascada completa de resoluciones "
-            f"{FACTORES_CASCADA_FASE1} ni el techo de seguridad ({PRECIO_MAXIMO_TECHO:.2f}). "
-            f"Revisar a mano en el tab 'en vivo' — puede que el precio válido para este producto "
-            f"esté fuera del rango [0, {PRECIO_MAXIMO_TECHO:.2f}].",
+            con_aviso(
+                f"Ningún valor entre {inicio:.2f} y {techo:.2f} fue aceptado, ni con la cascada completa "
+                f"{FACTORES_CASCADA_FASE1} ni el techo mismo. Revisar a mano en el tab 'en vivo' — puede que "
+                f"el precio válido de este producto esté fuera de ese rango."
+            ),
         )
 
     hi: Optional[float] = None
     valor = round(lo * 2, 2)
     for _ in range(MAX_ITER_FASE2):
-        if valor >= PRECIO_MAXIMO_TECHO:
+        _verificar_cancelacion()
+        if valor >= techo:
             intentos += 1
-            if _probar_precio(pc_session, id_producto, moneda, PRECIO_MAXIMO_TECHO):
+            if _probar_precio(pc_session, id_producto, moneda, techo):
                 return ResultadoBusqueda(
-                    PRECIO_MAXIMO_TECHO, intentos, "techo_seguridad",
-                    f"Se aceptó hasta {lo:.2f} y también el techo de seguridad ({PRECIO_MAXIMO_TECHO:.2f}); Perú Compras probablemente acepta más, pero se limita acá a propósito.",
+                    techo, intentos, "techo_seguridad",
+                    con_aviso(f"Se aceptó hasta {lo:.2f} y también el techo ({techo:.2f}); Perú Compras probablemente acepta más, pero se limita acá a propósito."),
                 )
-            hi = PRECIO_MAXIMO_TECHO
+            hi = techo
             break
         intentos += 1
         if _probar_precio(pc_session, id_producto, moneda, valor):
@@ -527,9 +544,10 @@ def _encontrar_precio_maximo(pc_session, id_producto: int, moneda: str) -> Resul
             hi = valor
             break
     if hi is None:
-        hi = PRECIO_MAXIMO_TECHO
+        hi = techo
 
     for _ in range(MAX_ITER_FASE3):
+        _verificar_cancelacion()
         if (hi - lo) <= PRECISION:
             break
         intentos += 1
@@ -541,26 +559,18 @@ def _encontrar_precio_maximo(pc_session, id_producto: int, moneda: str) -> Resul
         else:
             hi = medio
 
-    # Confirmación final: la bisección puede haber terminado con el último
-    # intento RECHAZADO en pantalla (hi). Volvemos a mandar exactamente
-    # `lo` (el máximo aceptado, siempre <= PRECIO_MAXIMO_TECHO) para que
-    # el campo "precio unitario" en Perú Compras quede efectivamente en
-    # el valor máximo encontrado. A DIFERENCIA DE ANTES: acá SÍ chequeamos
-    # si esta confirmación tuvo éxito. Si Perú Compras la rechaza (incluso
-    # con reintentos), NO marcamos motivo="ok" — eso era el bug que dejaba
-    # precio_maximo correcto en la BD pero el campo real del portal en 0.
     intentos += 1
     confirmado = _confirmar_precio_final(pc_session, id_producto, moneda, lo)
     if not confirmado:
         return ResultadoBusqueda(
             lo, intentos, "ok_no_confirmado",
-            f"Se encontró el máximo teórico ({lo:.2f}) pero Perú Compras lo RECHAZÓ al intentar "
-            f"dejarlo puesto en el campo, incluso reintentando. El campo del portal probablemente "
-            f"NO quedó en {lo:.2f} — revisar a mano en el tab 'en vivo'.",
+            con_aviso(
+                f"Se encontró el máximo teórico ({lo:.2f}) pero Perú Compras lo RECHAZÓ al intentar "
+                f"dejarlo puesto en el campo, incluso reintentando. Revisar a mano en el tab 'en vivo'."
+            ),
         )
 
-    return ResultadoBusqueda(lo, intentos, "ok")
-
+    return ResultadoBusqueda(lo, intentos, "ok", con_aviso(""))
 
 # --- persistencia (auditoría) -----------------------------------------------
 
@@ -646,26 +656,18 @@ def _guardar_resultado(run_id: int, producto: dict, resultado: ResultadoBusqueda
         conn.close()
 
 
-def _obtener_ultimos_precios() -> dict:
+def _obtener_ultimos_precios(precio_min: Optional[float] = None, precio_max: Optional[float] = None) -> dict:
     """
-    Último precio_maximo con motivo='ok' guardado por producto, sin
-    importar de qué run venga.
-
-    OJO — por qué exigimos motivo='ok' (y no solo "no nulo"): un
-    resultado con motivo 'techo_seguridad' o 'sin_rango_encontrado' NO
-    es un máximo confirmado — es una señal de que la búsqueda no pudo
-    encontrar el verdadero límite (por ejemplo, por el bug de saltarse
-    una banda angosta que existía antes de ajustar
-    FACTOR_CRECIMIENTO_FASE1). Si tratáramos esos casos como "ya
-    resueltos", 'saltar_existentes' los reusaría para siempre, sin
-    volver a intentarlo nunca con el algoritmo corregido.
-
-    Al exigir motivo='ok', cualquier producto que haya quedado en
-    NULL o en techo_seguridad automáticamente se vuelve a calcular
-    la próxima vez que se corra la búsqueda (con saltar_existentes=true,
-    que es el default) — sin que el usuario tenga que filtrar ni
-    seleccionar nada a mano.
+    Último precio_maximo con motivo='ok' por producto, de cualquier corrida,
+    SOLO si cae dentro del rango [precio_min, precio_max] de esta corrida
+    (sin precio_min no hay piso; sin precio_max el tope es PRECIO_MAXIMO_TECHO).
+    Exigir motivo='ok' hace que lo no confirmado (techo_seguridad,
+    sin_rango_encontrado, deteccion_no_confiable...) se recalcule, y el filtro
+    de rango hace que un valor viejo fuera del rango actual (ej. un 0.20 para
+    un producto de ~1000) también se recalcule.
     """
+    minimo = precio_min if precio_min is not None else 0
+    techo = precio_max if precio_max is not None else PRECIO_MAXIMO_TECHO
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -676,11 +678,13 @@ def _obtener_ultimos_precios() -> dict:
                     SELECT id_catalogo_producto, precio_maximo, motivo, detalle,
                            ROW_NUMBER() OVER (PARTITION BY id_catalogo_producto ORDER BY creado_en DESC) AS rn
                     FROM perucompras_ofertas_maximos_detalle
-                    WHERE precio_maximo IS NOT NULL AND precio_maximo <= %s AND motivo = 'ok'
+                    WHERE precio_maximo IS NOT NULL
+                      AND precio_maximo >= %s AND precio_maximo <= %s
+                      AND motivo = 'ok'
                 ) t
                 WHERE rn = 1
                 """,
-                (PRECIO_MAXIMO_TECHO,),
+                (minimo, techo),
             )
             return {f["id_catalogo_producto"]: f for f in cur.fetchall()}
     finally:
@@ -819,15 +823,19 @@ def _tarea_ofertas(
     n_categoria_filtro: Optional[str],
     saltar_existentes: bool,
     usuario_helbot: str,
-    omitir_propuesta: bool = True,
+    omitir_propuesta: bool = False,
+    precio_min: Optional[float] = None,
+    precio_max: Optional[float] = None,
 ):
     pc_session = perucompras_sesiones.sesion(uid)
     m = monitor_de(uid)
+    _cancelar_ofertas.clear()
     _estado_ofertas.update({
         "corriendo": True, "producto_actual": None,
         "productos_completados": 0, "total_productos": 0,
         "iniciado_en": datetime.now().isoformat(),
         "terminado_en": None, "error": None, "run_id": run_id,
+        "cancelado": False,
     })
     if m:
         m.pausar()
@@ -844,21 +852,15 @@ def _tarea_ofertas(
 
         _estado_ofertas["total_productos"] = len(productos_totales)
 
-        ultimos_precios = _obtener_ultimos_precios() if saltar_existentes else {}
+        ultimos_precios = _obtener_ultimos_precios(precio_min, precio_max) if saltar_existentes else {}
 
         for producto in productos_totales:
+            _verificar_cancelacion()
             _estado_ofertas["producto_actual"] = producto["descripcion"][:80]
 
             try:
                 existente = ultimos_precios.get(producto["id_catalogo_producto"])
                 if existente is not None:
-                    # Aunque reusamos el valor guardado (no volvemos a "buscar"),
-                    # sí mandamos ese precio a Inserta_ProductoOfertadoTMP para
-                    # que el campo "precio unitario" quede puesto en pantalla,
-                    # igual que si lo hubiéramos recalculado ahora. Con
-                    # confirmación real (ver _confirmar_precio_final): si Perú
-                    # Compras rechaza dejarlo puesto, NO lo marcamos como
-                    # "reusado" sin más.
                     confirmado = _confirmar_precio_final(
                         pc_session, producto["id_catalogo_producto"], producto["moneda"], existente["precio_maximo"]
                     )
@@ -878,7 +880,9 @@ def _tarea_ofertas(
                                     f"al intentar dejarlo puesto ahora — el campo del portal probablemente NO quedó en ese valor.",
                         )
                 else:
-                    resultado = _encontrar_precio_maximo(pc_session, producto["id_catalogo_producto"], producto["moneda"])
+                    resultado = _encontrar_precio_maximo(
+                        pc_session, producto["id_catalogo_producto"], producto["moneda"], precio_min, precio_max
+                    )
 
                 _guardar_resultado(run_id, producto, resultado)
 
@@ -894,12 +898,6 @@ def _tarea_ofertas(
                     )
 
             except _requests_lib.exceptions.RequestException as e:
-                # La conexión se cayó de forma persistente (se agotaron los
-                # reintentos de _probar_precio) para ESTE producto puntual.
-                # En vez de tumbar la corrida entera (lo que pasaba antes),
-                # lo registramos como error de este producto y seguimos con
-                # el siguiente — así una falla de red aislada no te hace
-                # perder el trabajo ya avanzado sobre el resto del catálogo.
                 logger.exception(
                     "Fallo de conexión persistente en producto %s (run_id=%s) — se salta y sigue con el siguiente",
                     producto.get("id_catalogo_producto"), run_id,
@@ -914,16 +912,25 @@ def _tarea_ofertas(
             _estado_ofertas["productos_completados"] += 1
 
         _cerrar_run(run_id, "completado", None, _estado_ofertas["total_productos"])
+    except CorridaCancelada:
+        logger.info(
+            "Búsqueda cancelada por el usuario (run_id=%s) tras %d producto(s)",
+            run_id, _estado_ofertas["productos_completados"],
+        )
+        _estado_ofertas["cancelado"] = True
+        # Se guarda como 'completado' + texto en error para no depender de que
+        # la columna estado acepte un valor nuevo.
+        _cerrar_run(run_id, "completado", "Cancelado por el usuario", _estado_ofertas["productos_completados"])
     except Exception as e:
         logger.exception("Error en _tarea_ofertas")
         _estado_ofertas["error"] = str(e)
         _cerrar_run(run_id, "error", str(e), _estado_ofertas.get("total_productos", 0))
     finally:
+        _cancelar_ofertas.clear()
         if m:
             m.reanudar()
         _estado_ofertas["corriendo"] = False
         _estado_ofertas["terminado_en"] = datetime.now().isoformat()
-
 
 # --- endpoints ---------------------------------------------------------------
 
@@ -935,12 +942,28 @@ def ejecutar_ofertas(
     n_catalogo: Optional[str] = None,
     n_categoria: Optional[str] = None,
     saltar_existentes: bool = True,
-    omitir_propuesta: bool = False,
+    omitir_propuesta: bool = True,
+    precio_min: Optional[float] = None,
+    precio_max: Optional[float] = None,
     usuario: UsuarioToken = Depends(obtener_usuario_actual),
 ):
     pc_session = perucompras_sesiones.sesion(uid)
     if pc_session is None or not pc_session.autenticado or pc_session.session is None:
         raise HTTPException(401, "No hay sesión activa de Perú Compras para este usuario")
+
+    # 0 o negativo = "sin valor" (se usa el default)
+    if precio_min is not None and precio_min <= 0:
+        precio_min = None
+    if precio_max is not None and precio_max <= 0:
+        precio_max = None
+    techo_efectivo = precio_max if precio_max is not None else PRECIO_MAXIMO_TECHO
+    if precio_min is not None and precio_min >= techo_efectivo:
+        raise HTTPException(
+            400,
+            f"El precio mínimo ({precio_min:.2f}) debe ser menor que el precio máximo ({techo_efectivo:.2f}). "
+            f"Si no pones máximo, el techo por defecto es {PRECIO_MAXIMO_TECHO:.2f}.",
+        )
+
     if _estado_ofertas["corriendo"]:
         return {"ok": True, "detalle": "Ya hay una búsqueda de precios máximos en curso"}
 
@@ -948,9 +971,17 @@ def ejecutar_ofertas(
     run_id = _crear_run(usuario_helbot, uid)
     background_tasks.add_task(
         _tarea_ofertas, uid, run_id, n_acuerdo, n_catalogo, n_categoria,
-        saltar_existentes, usuario_helbot, omitir_propuesta,
+        saltar_existentes, usuario_helbot, omitir_propuesta, precio_min, precio_max,
     )
     return {"ok": True, "detalle": "Búsqueda de precios máximos iniciada en background", "run_id": run_id}
+
+
+@router.post("/cancelar")
+def cancelar_ofertas(usuario: UsuarioToken = Depends(obtener_usuario_actual)):
+    if not _estado_ofertas["corriendo"]:
+        return {"ok": False, "detalle": "No hay ninguna búsqueda en curso"}
+    _cancelar_ofertas.set()
+    return {"ok": True, "detalle": "Cancelación solicitada: se detiene en cuanto termine la request actual"}
 
 @router.get("/estado")
 def estado_ofertas():
