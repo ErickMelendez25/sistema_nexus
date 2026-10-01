@@ -972,6 +972,48 @@ def listar_categorias_ep(uid: str, n_catalogo: str, usuario: UsuarioToken = Depe
     return {"categorias": categorias}
 
 
+@router.get("/contar")
+def contar_ofertas(
+    uid: str,
+    n_acuerdo: str,
+    n_catalogo: str,
+    n_categoria: Optional[str] = None,
+    usuario: UsuarioToken = Depends(obtener_usuario_actual),
+):
+    """
+    Cuenta productos SIN descargarlos (pide length=1 y lee recordsTotal).
+    Si el lock de la sesión está ocupado, no se queda esperando:
+    responde ocupado=True rápido para no trabar los selects.
+    """
+    pc_session = perucompras_sesiones.sesion(uid)
+    if pc_session is None or not pc_session.autenticado or pc_session.session is None:
+        raise HTTPException(401, "No hay sesión activa de Perú Compras para este usuario")
+
+    if not pc_session.request_lock.acquire(timeout=3):
+        return {"total": None, "ocupado": True}
+    try:
+        form = {
+            "draw": "1", **_columnas_datatable(),
+            "order[0][column]": "0", "order[0][dir]": "asc",
+            "start": "0", "length": "1",
+            "search[value]": "", "search[regex]": "false",
+            "N_Acuerdo": n_acuerdo, "N_Catalogo": n_catalogo,
+            "N_Categoria": n_categoria or "",
+            "C_Descripcion": "",
+        }
+        resp = pc_session.session.post(
+            URL_LISTA_PRODUCTOS, data=form,
+            headers={"X-Requested-With": "XMLHttpRequest"}, timeout=20,
+        )
+        cuerpo = _json_o_falla(resp, f"Contar productos (acuerdo={n_acuerdo}, catálogo={n_catalogo})")
+        total = int(cuerpo.get("recordsTotal", 0))
+    except RespuestaPeruComprasInvalida as e:
+        logger.warning("Respuesta inválida de Perú Compras en /contar (uid=%s): %s", uid, e)
+        raise HTTPException(502, f"Perú Compras no devolvió el conteo esperado. Detalle: {e}")
+    finally:
+        pc_session.request_lock.release()
+    return {"total": total, "ocupado": False}
+
 @router.get("/vivo")
 def ofertas_en_vivo(
     uid: str,

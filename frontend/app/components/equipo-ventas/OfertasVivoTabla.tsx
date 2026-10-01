@@ -114,10 +114,14 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
   };
 
   const cargarVivo = useCallback(async () => {
-    if (!uid) return;
+    if (!uid || !catalogoSel) {
+      setProductos([]);
+      return;
+    }
     setCargando(true);
     setError("");
 
+    
     const params = new URLSearchParams({ uid });
     if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
     if (catalogoSel) params.set("n_catalogo", catalogoSel);

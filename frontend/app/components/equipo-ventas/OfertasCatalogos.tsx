@@ -45,21 +45,39 @@ export default function OfertasCatalogos({
 
 
   const [totalVivo, setTotalVivo] = useState<number | null>(null);
-    const [cargandoTotal, setCargandoTotal] = useState(false);
+  const [cargandoTotal, setCargandoTotal] = useState(false);
+  const [conteoOcupado, setConteoOcupado] = useState(false);
 
-    useEffect(() => {
-    if (!uid) return;
-    setCargandoTotal(true);
-    const params = new URLSearchParams({ uid });
-    if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
-    if (catalogoSel) params.set("n_catalogo", catalogoSel);
-    if (categoriaSel) params.set("n_categoria", categoriaSel);
-    fetchConToken(`${apiBase}/perucompras/ofertas/vivo?${params.toString()}`)
-        .then((r) => r.json())
-        .then((data) => setTotalVivo(data.total ?? null))
-        .catch(() => setTotalVivo(null))
-        .finally(() => setCargandoTotal(false));
-    }, [apiBase, uid, acuerdoSel, catalogoSel, categoriaSel]);
+  useEffect(() => {
+    if (!uid || !acuerdoSel || !catalogoSel) {
+      setTotalVivo(null);
+      setConteoOcupado(false);
+      return;
+    }
+    const controlador = new AbortController();
+    const temporizador = setTimeout(async () => {
+      setCargandoTotal(true);
+      try {
+        const params = new URLSearchParams({ uid, n_acuerdo: acuerdoSel, n_catalogo: catalogoSel });
+        if (categoriaSel) params.set("n_categoria", categoriaSel);
+        const r = await fetchConToken(
+          `${apiBase}/perucompras/ofertas/contar?${params.toString()}`,
+          { signal: controlador.signal }
+        );
+        const data = await r.json();
+        setTotalVivo(data.total ?? null);
+        setConteoOcupado(!!data.ocupado);
+      } catch {
+        if (!controlador.signal.aborted) setTotalVivo(null);
+      } finally {
+        if (!controlador.signal.aborted) setCargandoTotal(false);
+      }
+    }, 600);
+    return () => {
+      clearTimeout(temporizador);
+      controlador.abort();
+    };
+  }, [apiBase, uid, acuerdoSel, catalogoSel, categoriaSel]);
 
   const consultarEstado = async () => {
     try {
@@ -229,11 +247,13 @@ export default function OfertasCatalogos({
           {corriendo ? "Buscando precios máximos..." : "Buscar precios máximos"}
         </button>
 
-        {totalVivo !== null && (
-            <span className="text-xs text-slate-500">
-                {cargandoTotal ? "Contando..." : `${totalVivo} producto(s) encontrados con este filtro`}
-            </span>
-            )}
+        {cargandoTotal ? (
+          <span className="text-xs text-slate-500">Contando...</span>
+        ) : conteoOcupado ? (
+          <span className="text-xs text-amber-600">Conteo no disponible ahora (Perú Compras ocupado)</span>
+        ) : totalVivo !== null ? (
+          <span className="text-xs text-slate-500">{totalVivo} producto(s) encontrados con este filtro</span>
+        ) : null}
 
         {estado && (
           <div className="text-xs text-slate-500">
