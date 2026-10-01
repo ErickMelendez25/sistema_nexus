@@ -42,6 +42,7 @@ export default function OfertasCatalogos({
   const [categoriaSel, setCategoriaSel] = useState("");
   const [cargandoOpciones, setCargandoOpciones] = useState(false);
   const [saltarExistentes, setSaltarExistentes] = useState(true);
+  const [omitirPropuesta, setOmitirPropuesta] = useState(true);
 
 
   const [totalVivo, setTotalVivo] = useState<number | null>(null);
@@ -166,7 +167,11 @@ export default function OfertasCatalogos({
     setLanzando(true);
     onEstadoChange?.(true);
     try {
-      const params = new URLSearchParams({ uid, saltar_existentes: String(saltarExistentes) });
+      const params = new URLSearchParams({
+        uid,
+        saltar_existentes: String(saltarExistentes),
+        omitir_propuesta: String(omitirPropuesta),
+      });
       if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
       if (catalogoSel) params.set("n_catalogo", catalogoSel);
       if (categoriaSel) params.set("n_categoria", categoriaSel);
@@ -234,7 +239,32 @@ export default function OfertasCatalogos({
           />
           Saltar productos ya calculados
         </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-slate-500 select-none">
+          <input
+            type="checkbox"
+            checked={omitirPropuesta}
+            onChange={(e) => setOmitirPropuesta(e.target.checked)}
+            disabled={corriendo}
+          />
+          Omitir productos en PROPUESTA
+        </label>
       </div>
+
+      <p className="text-[11px] leading-snug text-slate-400">
+        {omitirPropuesta ? (
+          <>
+            <strong className="text-amber-600">Marcado:</strong> los productos con estado{" "}
+            <strong>PROPUESTA</strong> (nuevos, nadie ha presentado ofertas) NO se tocan: no se les busca
+            precio máximo ni se les cambia nada en Perú Compras. Solo se procesan los demás.
+          </>
+        ) : (
+          <>
+            <strong className="text-slate-500">Sin marcar:</strong> se procesan TODOS los productos, incluidos
+            los que están en PROPUESTA (se les busca el precio máximo y se les pone ese precio).
+          </>
+        )}
+      </p>
 
       <div className="flex items-center gap-3">
         <button

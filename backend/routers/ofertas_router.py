@@ -798,6 +798,17 @@ def _recolectar_productos(pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_cat
     return productos_totales
 
 
+
+def _es_propuesta(estado) -> bool:
+    """
+    True si el producto está en estado PROPUESTA ("Nuevo, nadie ha presentado
+    ofertas"). Es un 'in' y no un '==' por si el portal devuelve el texto
+    envuelto en HTML (<div ...>PROPUESTA</div>) en vez de texto plano.
+    Ojo: 'OFERTADA SIN OFERTA' y 'OFERTADA NO ADJUDICADA' NO contienen
+    la palabra PROPUESTA, así que no se confunden.
+    """
+    return "PROPUESTA" in str(estado or "").upper()
+
 # --- tarea en background ----------------------------------------------------
 
 def _tarea_ofertas(
@@ -808,6 +819,7 @@ def _tarea_ofertas(
     n_categoria_filtro: Optional[str],
     saltar_existentes: bool,
     usuario_helbot: str,
+    omitir_propuesta: bool = True,
 ):
     pc_session = perucompras_sesiones.sesion(uid)
     m = monitor_de(uid)
@@ -821,6 +833,14 @@ def _tarea_ofertas(
         m.pausar()
     try:
         productos_totales = _recolectar_productos(pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_categoria_filtro)
+
+        if omitir_propuesta:
+            antes = len(productos_totales)
+            productos_totales = [p for p in productos_totales if not _es_propuesta(p.get("estado_actual"))]
+            logger.info(
+                "omitir_propuesta=True: %d producto(s) en PROPUESTA omitidos, quedan %d (run_id=%s)",
+                antes - len(productos_totales), len(productos_totales), run_id,
+            )
 
         _estado_ofertas["total_productos"] = len(productos_totales)
 
@@ -915,6 +935,7 @@ def ejecutar_ofertas(
     n_catalogo: Optional[str] = None,
     n_categoria: Optional[str] = None,
     saltar_existentes: bool = True,
+    omitir_propuesta: bool = False,
     usuario: UsuarioToken = Depends(obtener_usuario_actual),
 ):
     pc_session = perucompras_sesiones.sesion(uid)
@@ -926,7 +947,8 @@ def ejecutar_ofertas(
     usuario_helbot = usuario.nombre_completo or usuario.username
     run_id = _crear_run(usuario_helbot, uid)
     background_tasks.add_task(
-        _tarea_ofertas, uid, run_id, n_acuerdo, n_catalogo, n_categoria, saltar_existentes, usuario_helbot,
+        _tarea_ofertas, uid, run_id, n_acuerdo, n_catalogo, n_categoria,
+        saltar_existentes, usuario_helbot, omitir_propuesta,
     )
     return {"ok": True, "detalle": "Búsqueda de precios máximos iniciada en background", "run_id": run_id}
 
