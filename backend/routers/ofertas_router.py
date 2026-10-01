@@ -71,7 +71,7 @@ router = APIRouter(prefix="/perucompras/ofertas", tags=["perucompras-ofertas"])
 # frontend. El hilo que quedó a medias sigue corriendo en segundo plano
 # (Python no puede cancelarlo), pero el usuario ya no se queda esperando
 # indefinidamente ni se lleva un error críptico.
-TIMEOUT_VIVO_SEGUNDOS = 25
+TIMEOUT_VIVO_SEGUNDOS = 45
 _pool_vivo = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 BASE = "https://catalogos.perucompras.gob.pe"
@@ -1014,16 +1014,47 @@ def contar_ofertas(
         pc_session.request_lock.release()
     return {"total": total, "ocupado": False}
 
+
+def _recolectar_productos_directo(
+    pc_session, n_acuerdo, n_catalogo, n_categoria,
+    acuerdo_txt: str, catalogo_txt: str, categoria_txt: str,
+) -> list[dict]:
+    """
+    Camino rápido para /vivo cuando ya vienen acuerdo + catálogo + categoría:
+    UNA sola request a Perú Compras (sin listar catálogos ni categorías).
+    """
+    with pc_session.request_lock:
+        filas = _obtener_productos(pc_session.session, n_acuerdo, n_catalogo, n_categoria)
+    return [
+        {
+            "id_catalogo_producto": fila["N_CatalogoProducto"],
+            "descripcion": fila.get("C_Descripcion", ""),
+            "moneda": fila.get("C_MonedaOfertada", "PEN"),
+            "n_acuerdo": n_acuerdo,
+            "acuerdo": acuerdo_txt or n_acuerdo,
+            "n_catalogo": n_catalogo,
+            "catalogo": catalogo_txt or n_catalogo,
+            "n_categoria": n_categoria,
+            "categoria": categoria_txt or n_categoria,
+            "estado_actual": fila.get("C_Estado", ""),
+            "precio_actual": fila.get("N_PrecioOfertado"),
+        }
+        for fila in filas
+    ]
+
 @router.get("/vivo")
 def ofertas_en_vivo(
     uid: str,
     n_acuerdo: Optional[str] = None,
     n_catalogo: Optional[str] = None,
     n_categoria: Optional[str] = None,
+    acuerdo_txt: str = "",
+    catalogo_txt: str = "",
+    categoria_txt: str = "",
     usuario: UsuarioToken = Depends(obtener_usuario_actual),
 ):
     """
-    Consulta EN VIVO a Perú Compras (sin tocar la BD para los datos del
+    Consulta EN VIVO a Perú Compras(sin tocar la BD para los datos del
     portal). Además le pega el precio manual que ya tenías guardado en tu
     BD para cada producto (tabla perucompras_ofertas_manual), para poder
     mostrar/editar ese valor en la tabla en vivo.
@@ -1042,7 +1073,13 @@ def ofertas_en_vivo(
     if m and not ya_pausado_por_otro:
         m.pausar()
     try:
-        futuro = _pool_vivo.submit(_recolectar_productos, pc_session, n_acuerdo, n_catalogo, n_categoria)
+        if n_acuerdo and n_catalogo and n_categoria:
+            futuro = _pool_vivo.submit(
+                _recolectar_productos_directo, pc_session, n_acuerdo, n_catalogo, n_categoria,
+                acuerdo_txt, catalogo_txt, categoria_txt,
+            )
+        else:
+            futuro = _pool_vivo.submit(_recolectar_productos, pc_session, n_acuerdo, n_catalogo, n_categoria)
         try:
             productos = futuro.result(timeout=TIMEOUT_VIVO_SEGUNDOS)
         except concurrent.futures.TimeoutError:

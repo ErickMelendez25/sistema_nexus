@@ -127,6 +127,9 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
     if (acuerdoSel) params.set("n_acuerdo", acuerdoSel);
     if (catalogoSel) params.set("n_catalogo", catalogoSel);
     if (categoriaSel) params.set("n_categoria", categoriaSel);
+    params.set("acuerdo_txt", acuerdos.find((a) => a.value === acuerdoSel)?.text ?? "");
+    params.set("catalogo_txt", catalogos.find((c) => c.value === catalogoSel)?.text ?? "");
+    params.set("categoria_txt", categorias.find((c) => c.value === categoriaSel)?.text ?? "");
     const url = `${apiBase}/perucompras/ofertas/vivo?${params.toString()}`;
 
     // Reintenta automáticamente: si hay una búsqueda de precios máximos
@@ -172,7 +175,7 @@ export default function OfertasVivoTabla({ apiBase, uid, tick }: { apiBase: stri
     setError(ultimoError);
     setProductos([]);
     setCargando(false);
-  }, [apiBase, uid, acuerdoSel, catalogoSel, categoriaSel]);
+  }, [apiBase, uid, acuerdoSel, catalogoSel, categoriaSel, acuerdos, catalogos, categorias]);
 
   useEffect(() => {
     cargarVivo();
