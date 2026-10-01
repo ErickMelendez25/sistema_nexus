@@ -759,10 +759,12 @@ def _recolectar_productos(pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_cat
     es el mismo dato que ya venía trayendo _obtener_productos.
     """
     session = pc_session.session
-    with pc_session.request_lock:
-        acuerdos = _obtener_acuerdos(session)
     if n_acuerdo_filtro:
-        acuerdos = [a for a in acuerdos if a[0] == n_acuerdo_filtro]
+        texto_filtro = dict(ACUERDOS_RESPALDO).get(n_acuerdo_filtro, n_acuerdo_filtro)
+        acuerdos = [(n_acuerdo_filtro, texto_filtro)]
+    else:
+        with pc_session.request_lock:
+            acuerdos = _obtener_acuerdos(session)
 
     productos_totales: list[dict] = []
     for n_acuerdo, texto_acuerdo in acuerdos:
