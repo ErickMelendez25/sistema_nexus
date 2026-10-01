@@ -87,6 +87,7 @@ export default function RestringidosTabla({ apiBase, catalogos, uid, tick }: { a
   const [fechaFin, setFechaFin] = useState("");
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const [restringiendo, setRestringiendo] = useState(false);
+  const [descartando, setDescartando] = useState(false);
   const [kpis, setKpis] = useState<KpisRestringidos>(kpiVacios);
 const [preview, setPreview] = useState<string | null>(null);
   const [verMasAbierto, setVerMasAbierto] = useState(false);
@@ -224,6 +225,30 @@ const confirmarRestriccion = async (ids: number[]) => {
     }
   };
 
+  const descartarRestriccion = async (ids: number[]) => {
+    if (ids.length === 0) return;
+    setDescartando(true);
+    setError("");
+    try {
+      const r = await fetchConToken(`${apiBase}/perucompras/extraccion/restringidos/descartar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, uid }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `Error HTTP ${r.status}`);
+      }
+      setSeleccionados(new Set());
+      await cargarDatos();
+      await cargarKpis();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo descartar");
+    } finally {
+      setDescartando(false);
+    }
+  };
+
 useEffect(() => {
     setPagina(1);
     setSeleccionados(new Set());
@@ -271,15 +296,26 @@ useEffect(() => {
           </div>
 
           {estadoFiltro === "pendiente" && seleccionados.size > 0 && (
-            <button
-              type="button"
-              onClick={() => confirmarRestriccion(Array.from(seleccionados))}
-              disabled={restringiendo}
-              className="flex items-center gap-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg px-3 py-2 transition-colors disabled:opacity-50"
-            >
-              <ShieldAlert size={13} />
-              {restringiendo ? "Restringiendo..." : `Restringir seleccionadas (${seleccionados.size})`}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => confirmarRestriccion(Array.from(seleccionados))}
+                disabled={restringiendo || descartando}
+                className="flex items-center gap-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg px-3 py-2 transition-colors disabled:opacity-50"
+              >
+                <ShieldAlert size={13} />
+                {restringiendo ? "Restringiendo..." : `Restringir seleccionadas (${seleccionados.size})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => descartarRestriccion(Array.from(seleccionados))}
+                disabled={restringiendo || descartando}
+                className="flex items-center gap-1.5 text-xs font-semibold bg-slate-500 hover:bg-slate-600 text-white rounded-lg px-3 py-2 transition-colors disabled:opacity-50"
+              >
+                <X size={13} />
+                {descartando ? "Descartando..." : `Descartar seleccionadas (${seleccionados.size})`}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -477,14 +513,24 @@ useEffect(() => {
                     </td>
                     {estadoFiltro === "pendiente" && (
                       <td className="px-3 py-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => confirmarRestriccion([f.id])}
-                          disabled={restringiendo}
-                          className="text-[10px] font-semibold bg-red-600 hover:bg-red-700 text-white rounded-md px-2.5 py-1 transition-colors disabled:opacity-50"
-                        >
-                          Restringir
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => confirmarRestriccion([f.id])}
+                            disabled={restringiendo || descartando}
+                            className="text-[10px] font-semibold bg-red-600 hover:bg-red-700 text-white rounded-md px-2.5 py-1 transition-colors disabled:opacity-50"
+                          >
+                            Restringir
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => descartarRestriccion([f.id])}
+                            disabled={restringiendo || descartando}
+                            className="text-[10px] font-semibold bg-slate-400 hover:bg-slate-500 text-white rounded-md px-2.5 py-1 transition-colors disabled:opacity-50"
+                          >
+                            Descartar
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>

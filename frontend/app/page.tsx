@@ -174,6 +174,67 @@ import {
     tocarTono(1318.5, 0.09, 0.14); // E6
   }
 
+  // ============================================================
+  // Tono de llamada (timbre) — generado con Web Audio, sin archivos mp3.
+  // "entrante": timbre doble cada 2.5s. "saliente": tono de espera cada 3.5s.
+  // ============================================================
+  let intervaloTonoLlamada: ReturnType<typeof setInterval> | null = null;
+  let idTonoLlamada = 0;
+
+  function detenerTonoLlamada() {
+    idTonoLlamada++; // invalida cualquier arranque pendiente
+    if (intervaloTonoLlamada) {
+      clearInterval(intervaloTonoLlamada);
+      intervaloTonoLlamada = null;
+    }
+  }
+
+  function iniciarTonoLlamada(tipo: "entrante" | "saliente") {
+    detenerTonoLlamada();
+    const miId = idTonoLlamada;
+    const ctx = obtenerAudioCtx();
+    if (!ctx) return;
+
+    const tocarTono = (frecuencia: number, inicio: number, duracion: number, volumen: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = frecuencia;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const t0 = ctx.currentTime + inicio;
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(volumen, t0 + 0.02);
+      gain.gain.setValueAtTime(volumen, t0 + duracion - 0.05);
+      gain.gain.linearRampToValueAtTime(0, t0 + duracion);
+      osc.start(t0);
+      osc.stop(t0 + duracion);
+    };
+
+    const patron = () => {
+      if (tipo === "entrante") {
+        tocarTono(880, 0, 0.3, 0.25);
+        tocarTono(1100, 0.35, 0.3, 0.25);
+        tocarTono(880, 0.9, 0.3, 0.25);
+        tocarTono(1100, 1.25, 0.3, 0.25);
+      } else {
+        tocarTono(425, 0, 1.2, 0.08);
+      }
+    };
+
+    const arrancar = () => {
+      if (miId !== idTonoLlamada) return; // la llamada ya terminó
+      patron();
+      intervaloTonoLlamada = setInterval(patron, tipo === "entrante" ? 2500 : 3500);
+    };
+
+    if (ctx.state === "suspended") {
+      ctx.resume().then(arrancar).catch(() => {});
+    } else {
+      arrancar();
+    }
+  }
+
 
   // ============================================================
   // Tipos
@@ -484,7 +545,9 @@ interface ResumenChat {
       conId: null,
       conNombre: "",
       conVideo: false,
+      conFoto: null,
     });
+
     const [micActivo, setMicActivo] = useState(true);
     const [camaraActiva, setCamaraActiva] = useState(true);
 
@@ -492,8 +555,12 @@ interface ResumenChat {
     const streamLocalRef = useRef<MediaStream | null>(null);
     const videoLocalRef = useRef<HTMLVideoElement>(null);
     const videoRemotoRef = useRef<HTMLVideoElement>(null);
+    const audioRemotoRef = useRef<HTMLAudioElement>(null);
     const llamadaRef = useRef(llamada);
     llamadaRef.current = llamada;
+
+    const streamRemotoRef = useRef<MediaStream | null>(null);
+    const candidatosPendientesRef = useRef<RTCIceCandidateInit[]>([]);
 
     const STUN_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
@@ -507,6 +574,7 @@ interface ResumenChat {
     // Crea el RTCPeerConnection y le conecta el stream local + los
     // candidatos ICE que va generando (se mandan al otro por el WS).
     const crearPeerConnection = useCallback((paraId: number) => {
+      pcRef.current?.close();
       const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
 
       pc.onicecandidate = (event) => {
@@ -520,11 +588,17 @@ interface ResumenChat {
       };
 
       pc.ontrack = (event) => {
+        // Se guarda el stream en un ref: si el <video>/<audio> aún no
+        // existen en pantalla, el efecto del Paso 5 los conecta cuando
+        // aparezcan.
+        streamRemotoRef.current = event.streams[0];
         if (videoRemotoRef.current) {
           videoRemotoRef.current.srcObject = event.streams[0];
         }
+        if (audioRemotoRef.current) {
+          audioRemotoRef.current.srcObject = event.streams[0];
+        }
       };
-
       pcRef.current = pc;
       return pc;
     }, [enviarSenalLlamada]);
@@ -553,26 +627,48 @@ interface ResumenChat {
       pcRef.current = null;
       streamLocalRef.current?.getTracks().forEach((t) => t.stop());
       streamLocalRef.current = null;
+      streamRemotoRef.current = null;
+      candidatosPendientesRef.current = [];
+      if (videoLocalRef.current) videoLocalRef.current.srcObject = null;
+      if (videoRemotoRef.current) videoRemotoRef.current.srcObject = null;
+      if (audioRemotoRef.current) audioRemotoRef.current.srcObject = null;
       setMicActivo(true);
       setCamaraActiva(true);
-      setLlamada({ estado: "inactiva", conId: null, conNombre: "", conVideo: false });
+      setLlamada({ estado: "inactiva", conId: null, conNombre: "", conVideo: false, conFoto: null });
     }, []);
 
     // Botón de teléfono/video en ChatPanel llama a esto.
     const iniciarLlamada = useCallback(
       async (destinoId: number, destinoNombre: string, conVideo: boolean) => {
-        setLlamada({ estado: "saliente", conId: destinoId, conNombre: destinoNombre, conVideo });
-        enviarSenalLlamada({ tipo: "llamada_iniciar", para: destinoId, con_video: conVideo });
+        if (llamadaRef.current.estado !== "inactiva") return; // ya hay una llamada en curso
 
-        const stream = await obtenerStreamLocal(conVideo);
-        const pc = crearPeerConnection(destinoId);
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        const fotoDestino = usuariosChatMapRef.current[destinoId]?.foto_perfil ?? null;
+        setLlamada({ estado: "saliente", conId: destinoId, conNombre: destinoNombre, conVideo, conFoto: fotoDestino });
+        try {
+          // 1. Primero los permisos: si fallan, al otro NO le suena nada.
+          const stream = await obtenerStreamLocal(conVideo);
 
-        const oferta = await pc.createOffer();
-        await pc.setLocalDescription(oferta);
-        enviarSenalLlamada({ tipo: "llamada_oferta", para: destinoId, sdp: oferta });
+          // 2. Recién ahora se le avisa al otro que están llamando.
+          enviarSenalLlamada({ tipo: "llamada_iniciar", para: destinoId, con_video: conVideo });
+
+          const pc = crearPeerConnection(destinoId);
+          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+          const oferta = await pc.createOffer();
+          await pc.setLocalDescription(oferta);
+          enviarSenalLlamada({ tipo: "llamada_oferta", para: destinoId, sdp: oferta });
+        } catch (e) {
+          console.error("Error al iniciar llamada:", e);
+          enviarSenalLlamada({ tipo: "llamada_colgar", para: destinoId });
+          limpiarLlamada();
+          alert(
+            e instanceof Error
+              ? e.message
+              : "No se pudo iniciar la llamada. Revisa los permisos de micrófono/cámara."
+          );
+        }
       },
-      [enviarSenalLlamada, obtenerStreamLocal, crearPeerConnection]
+      [enviarSenalLlamada, obtenerStreamLocal, crearPeerConnection, limpiarLlamada]
     );
 
     const aceptarLlamada = useCallback(async () => {
@@ -580,17 +676,37 @@ interface ResumenChat {
       if (!actual.conId) return;
       const destinoId = actual.conId;
 
-      const stream = await obtenerStreamLocal(actual.conVideo);
-      const pc = pcRef.current;
-      if (!pc) return;
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      try {
+        // Si el usuario aceptó muy rápido, espera (máx. 5s) a que llegue la oferta.
+        let intentos = 0;
+        while (!pcRef.current?.remoteDescription && intentos < 50) {
+          await new Promise((res) => setTimeout(res, 100));
+          intentos++;
+        }
+        const pc = pcRef.current;
+        if (!pc || !pc.remoteDescription) {
+          throw new Error("No llegó la señal de la llamada. Pide que vuelvan a llamarte.");
+        }
 
-      const respuesta = await pc.createAnswer();
-      await pc.setLocalDescription(respuesta);
-      enviarSenalLlamada({ tipo: "llamada_respuesta", para: destinoId, sdp: respuesta });
+        const stream = await obtenerStreamLocal(actual.conVideo);
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
-      setLlamada((prev) => ({ ...prev, estado: "conectada" }));
-    }, [enviarSenalLlamada, obtenerStreamLocal]);
+        const respuesta = await pc.createAnswer();
+        await pc.setLocalDescription(respuesta);
+        enviarSenalLlamada({ tipo: "llamada_respuesta", para: destinoId, sdp: respuesta });
+
+        setLlamada((prev) => ({ ...prev, estado: "conectada" }));
+      } catch (e) {
+        console.error("Error al aceptar llamada:", e);
+        enviarSenalLlamada({ tipo: "llamada_rechazar", para: destinoId });
+        limpiarLlamada();
+        alert(
+          e instanceof Error
+            ? e.message
+            : "No se pudo contestar. Revisa los permisos de micrófono/cámara."
+        );
+      }
+    }, [enviarSenalLlamada, obtenerStreamLocal, limpiarLlamada]);
 
     const rechazarLlamada = useCallback(() => {
       const actual = llamadaRef.current;
@@ -627,6 +743,43 @@ interface ResumenChat {
       crearPeerConnectionRef.current = crearPeerConnection;
       limpiarLlamadaRef.current = limpiarLlamada;
     }, [crearPeerConnection, limpiarLlamada]);
+
+
+    // Timbre: suena mientras la llamada esté en "entrante" (receptor) o
+    // "saliente" (quien llama). Se apaga solo al aceptar/rechazar/colgar.
+    useEffect(() => {
+      if (llamada.estado === "entrante") iniciarTonoLlamada("entrante");
+      else if (llamada.estado === "saliente") iniciarTonoLlamada("saliente");
+      else detenerTonoLlamada();
+      return () => detenerTonoLlamada();
+    }, [llamada.estado]);
+
+    // Si nadie contesta en 45s (o el otro está desconectado), se cuelga solo.
+    useEffect(() => {
+      if (llamada.estado !== "saliente" || !llamada.conId) return;
+      const destinoId = llamada.conId;
+      const t = setTimeout(() => {
+        enviarSenalLlamada({ tipo: "llamada_colgar", para: destinoId });
+        limpiarLlamada();
+        alert("No contestó la llamada.");
+      }, 45000);
+      return () => clearTimeout(t);
+    }, [llamada.estado, llamada.conId, enviarSenalLlamada, limpiarLlamada]);
+
+    // Conecta los streams a los <video>/<audio> apenas el overlay los monte.
+    useEffect(() => {
+      if (videoLocalRef.current && streamLocalRef.current) {
+        videoLocalRef.current.srcObject = streamLocalRef.current;
+      }
+      if (videoRemotoRef.current && streamRemotoRef.current) {
+        videoRemotoRef.current.srcObject = streamRemotoRef.current;
+        videoRemotoRef.current.play().catch(() => {});
+      }
+      if (audioRemotoRef.current && streamRemotoRef.current) {
+        audioRemotoRef.current.srcObject = streamRemotoRef.current;
+        audioRemotoRef.current.play().catch(() => {});
+      }
+    }, [llamada.estado]);
 
     // Manda el "escribiendo..." por el ÚNICO socket de chat (el de este
     // componente) — ChatPanel ya no abre su propio WebSocket.
@@ -835,11 +988,50 @@ interface ResumenChat {
 
         // ---------- Señalización de llamadas ----------
 
+        // >>> ESTE ERA EL BLOQUE QUE FALTABA <
+        if (data.tipo === "llamada_entrante") {
+          console.log("📞 llamada_entrante recibida:", data);
+          if (llamadaRef.current.estado !== "inactiva") {
+            // Ya estoy en otra llamada: rechazo automático (ocupado).
+            ws.send(JSON.stringify({ tipo: "llamada_rechazar", para: data.de }));
+            return;
+          }
+          // El backend solo manda "nombre" — la foto se busca localmente
+          // en usuariosChatMap, ya cargado al loguearse.
+          const fotoQuienLlama = usuariosChatMapRef.current[data.de]?.foto_perfil ?? null;
+          setLlamada({
+            estado: "entrante",
+            conId: data.de,
+            conNombre: data.nombre || "Usuario",
+            conVideo: !!data.con_video,
+            conFoto: fotoQuienLlama,
+          });
+          return;
+        }
 
         if (data.tipo === "llamada_oferta") {
+          const actual = llamadaRef.current;
+          // Ocupado con otra persona: ignorar esta oferta.
+          if (
+            actual.estado === "saliente" ||
+            actual.estado === "conectada" ||
+            (actual.estado === "entrante" && actual.conId !== data.de)
+          ) {
+            return;
+          }
           (async () => {
-            const pc = crearPeerConnectionRef.current(data.de);
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+            try {
+              const pc = crearPeerConnectionRef.current(data.de);
+              await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+              // Candidatos ICE que llegaron antes de tener la oferta aplicada.
+              const pendientes = candidatosPendientesRef.current;
+              candidatosPendientesRef.current = [];
+              for (const c of pendientes) {
+                await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+              }
+            } catch (e) {
+              console.error("Error procesando oferta:", e);
+            }
           })();
           return;
         }
@@ -847,20 +1039,38 @@ interface ResumenChat {
         if (data.tipo === "llamada_respuesta") {
           (async () => {
             const pc = pcRef.current;
-            if (pc) {
+            if (!pc) return;
+            try {
               await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+              const pendientes = candidatosPendientesRef.current;
+              candidatosPendientesRef.current = [];
+              for (const c of pendientes) {
+                await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+              }
               setLlamada((prev) => ({ ...prev, estado: "conectada" }));
+            } catch (e) {
+              console.error("Error procesando respuesta:", e);
             }
           })();
           return;
         }
 
         if (data.tipo === "llamada_ice") {
-          pcRef.current?.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+          if (!data.candidate) return;
+          const actual = llamadaRef.current;
+          if (actual.estado !== "inactiva" && actual.conId !== data.de) return;
+          const pc = pcRef.current;
+          if (pc && pc.remoteDescription) {
+            pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+          } else {
+            candidatosPendientesRef.current.push(data.candidate); // se aplica cuando llegue la oferta/respuesta
+          }
           return;
         }
 
         if (data.tipo === "llamada_rechazada" || data.tipo === "llamada_colgada") {
+          const actual = llamadaRef.current;
+          if (actual.conId && data.de !== actual.conId) return; // es de otra persona, ignorar
           limpiarLlamadaRef.current();
           return;
         }
@@ -2494,6 +2704,7 @@ const tabs = esAdmin
           onToggleCamara={toggleCamara}
           videoLocalRef={videoLocalRef}
           videoRemotoRef={videoRemotoRef}
+          audioRemotoRef={audioRemotoRef}
         />
       </div>
     );

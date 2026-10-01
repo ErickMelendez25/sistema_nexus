@@ -135,9 +135,11 @@ _estado_ofertas = {
 # navegador, inspecciona #ajaxAcuerdo > option, o la pestaña Network por
 # si hay un endpoint tipo ListaJ_AcuerdoMarco que no vimos todavía).
 ACUERDOS_RESPALDO: list[tuple[str, str]] = [
+    ("324", "EXT-CE-2024-3 MATERIALES E INSUMOS DE LIMPIEZA, PAPELES PARA ASEO Y LIMPIEZA"),
+    ("352", "EXT-CE-2024-12 TUBERIAS, PINTURAS, CERÁMICOS, SANITARIOS, ACCESORIOS, Y COMPLEMENTOS EN GENERAL"),
+    ("357", "EXT-CE-2024-16 ACCESORIOS DOMÉSTICOS Y BIENES PARA USOS DIVERSOS"),
     ("370", "EXT-CE-2024-17 BEBIDAS NO ALCOHÓLICAS"),
     ("372", "EXT-CE-2024-18 CEREALES, ACEITE, AZUCARES Y MENESTRAS"),
-    ("376", "EXT-CE-2024-26 MAQUINAS, EQUIPOS Y HERRAMIENTAS PARA JARDINERIA, SILVICULTURA Y AGRICULTURA"),
 ]
 
 _PATRON_SELECT_ACUERDO = re.compile(r'<select[^>]*id=["\']ajaxAcuerdo["\'][^>]*>(.*?)</select>', re.S)
@@ -155,9 +157,10 @@ def _obtener_acuerdos(session) -> list[tuple[str, str]]:
         if opciones:
             return opciones
     logger.warning(
-        "No se pudo extraer <select id='ajaxAcuerdo'> del HTML de %s — "
-        "usando ACUERDOS_RESPALDO. Revisa/actualiza esa lista si hace falta.",
-        URL_ENTRADA,
+        "USANDO ACUERDOS_RESPALDO: no se pudieron leer acuerdos del HTML de %s "
+        "(HTTP %s, largo del HTML=%s, contiene 'ajaxAcuerdo'=%s, select encontrado=%s). "
+        "Inicio del HTML: %r",
+        URL_ENTRADA, r.status_code, len(r.text), "ajaxAcuerdo" in r.text, bool(m), r.text[:200],
     )
     return ACUERDOS_RESPALDO
 
