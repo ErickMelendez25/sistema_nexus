@@ -756,12 +756,63 @@ def _resolver_run_id(uid: str, run_id: int) -> int:
         conn.close()
 
 
-def _recolectar_productos(pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_categoria_filtro) -> list[dict]:
+PAGINA_CORRIDA = 100        # filas por request al listar productos en la corrida
+REINTENTOS_PAGINA = 4       # reintentos por página si Perú Compras responde vacío / se corta
+
+
+def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_categoria: str) -> list[dict]:
+    """
+    Descarga TODOS los productos de una categoría para la búsqueda de precios
+    máximos. A diferencia de _obtener_productos:
+      - páginas de 100 filas (como /vivo-carga) en vez de 500
+      - toma el lock SOLO por página, no durante toda la descarga
+      - reintenta una página si Perú Compras responde vacío o se corta la conexión
+      - revisa la cancelación entre páginas
+      - deja el avance en _estado_ofertas para que la pantalla no se quede en 0/0
+    """
+    productos: list[dict] = []
+    start = 0
+    while True:
+        _verificar_cancelacion()
+        ultimo_error: Optional[Exception] = None
+        for intento in range(REINTENTOS_PAGINA):
+            try:
+                with pc_session.request_lock:
+                    filas, total = _pagina_productos(
+                        pc_session.session, n_acuerdo, n_catalogo, n_categoria, start, PAGINA_CORRIDA
+                    )
+                break
+            except (RespuestaPeruComprasInvalida, _requests_lib.exceptions.RequestException) as e:
+                ultimo_error = e
+                logger.warning(
+                    "Página start=%d de la categoría %s falló (intento %d/%d): %s",
+                    start, n_categoria, intento + 1, REINTENTOS_PAGINA, e,
+                )
+                time.sleep(3 * (intento + 1))
+                _verificar_cancelacion()
+        else:
+            raise ultimo_error
+
+        productos.extend(filas)
+        _estado_ofertas["producto_actual"] = f"Descargando lista de Perú Compras... {len(productos)}/{total}"
+        if (start // PAGINA_CORRIDA) % 10 == 0:
+            logger.info("Descargando productos de la categoría %s: %d/%d", n_categoria, len(productos), total)
+        start += PAGINA_CORRIDA
+        if not filas or start >= total:
+            break
+        time.sleep(0.05)
+    return productos
+
+
+def _recolectar_productos(
+    pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_categoria_filtro, en_corrida: bool = False
+) -> list[dict]:
     """
     Recorre acuerdo -> catálogo -> categoría en Perú Compras y devuelve la
     lista de productos, incluyendo el precio actual que YA tiene puesto el
-    portal en ese momento (N_PrecioOfertado) — sin ninguna llamada extra,
-    es el mismo dato que ya venía trayendo _obtener_productos.
+    portal (N_PrecioOfertado). Con en_corrida=True (búsqueda de precios
+    máximos) descarga por páginas chicas con reintentos, se puede cancelar
+    y muestra el avance.
     """
     session = pc_session.session
     if n_acuerdo_filtro:
@@ -783,8 +834,12 @@ def _recolectar_productos(pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_cat
             if n_categoria_filtro:
                 categorias = [c for c in categorias if c["value"] == n_categoria_filtro]
             for categoria in categorias:
-                with pc_session.request_lock:
-                    filas = _obtener_productos(session, n_acuerdo, catalogo["value"], categoria["value"])
+                if en_corrida:
+                    _verificar_cancelacion()
+                    filas = _obtener_productos_corrida(pc_session, n_acuerdo, catalogo["value"], categoria["value"])
+                else:
+                    with pc_session.request_lock:
+                        filas = _obtener_productos(session, n_acuerdo, catalogo["value"], categoria["value"])
                 for fila in filas:
                     productos_totales.append({
                         "id_catalogo_producto": fila["N_CatalogoProducto"],
@@ -840,7 +895,10 @@ def _tarea_ofertas(
     if m:
         m.pausar()
     try:
-        productos_totales = _recolectar_productos(pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_categoria_filtro)
+        _estado_ofertas["producto_actual"] = "Descargando lista de productos de Perú Compras..."
+        productos_totales = _recolectar_productos(
+            pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_categoria_filtro, en_corrida=True,
+        )
 
         if omitir_propuesta:
             antes = len(productos_totales)
@@ -912,6 +970,18 @@ def _tarea_ofertas(
             _estado_ofertas["productos_completados"] += 1
 
         _cerrar_run(run_id, "completado", None, _estado_ofertas["total_productos"])
+    except RespuestaPeruComprasInvalida as e:
+        logger.warning("Respuesta inválida de Perú Compras en la corrida (run_id=%s): %s", run_id, e)
+        try:
+            pc_session.marcar_sesion_perdida(motivo=f"corrida de precios máximos recibió respuesta inválida: {e}")
+        except Exception:
+            logger.exception("No se pudo marcar la sesión de Perú Compras como perdida")
+        msg = (
+            "Perú Compras devolvió una respuesta vacía o inválida (la sesión probablemente se cayó y se está "
+            f"reconectando). Espera unos segundos y vuelve a lanzar la búsqueda. Detalle: {e}"
+        )
+        _estado_ofertas["error"] = msg
+        _cerrar_run(run_id, "error", msg[:250], _estado_ofertas.get("total_productos", 0))
     except CorridaCancelada:
         logger.info(
             "Búsqueda cancelada por el usuario (run_id=%s) tras %d producto(s)",
