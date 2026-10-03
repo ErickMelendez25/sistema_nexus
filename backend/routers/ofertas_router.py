@@ -141,6 +141,43 @@ def _verificar_cancelacion():
         raise CorridaCancelada()
 
 
+class SesionNoDisponible(Exception):
+    """La sesión de Perú Compras sigue en None/caída después de esperar el relogin."""
+
+
+TIMEOUT_ESPERA_SESION = 180  # segundos máximos esperando que termine el relogin
+
+
+def _esperar_sesion(pc_session, timeout: int = TIMEOUT_ESPERA_SESION):
+    """
+    Si la sesión se perdió y el sistema está reloguéandose
+    (pc_session.session is None), espera aquí hasta que vuelva.
+    NO debe llamarse con el request_lock tomado (el relogin podría
+    necesitarlo). Respeta la cancelación del usuario.
+    """
+    limite = time.time() + timeout
+    avisado = False
+    while pc_session.session is None:
+        _verificar_cancelacion()
+        if pc_session.estado == "desconectado":
+            # El sistema se rindió (o es modo espejo y cayó): no hay relogin en camino.
+            raise SesionNoDisponible(
+                "La sesión de Perú Compras se cayó y no se va a reconectar sola. "
+                "Si usas modo espejo, pega las cookies de nuevo y relanza la búsqueda "
+                "(con 'Saltar productos ya calculados' marcado continúa donde quedó)."
+            )
+        if time.time() > limite:
+            raise SesionNoDisponible(
+                f"La sesión de Perú Compras no volvió en {timeout}s tras perderse"
+            )
+        if not avisado:
+            logger.warning("Sesión de Perú Compras caída: esperando el relogin automático...")
+            _estado_ofertas["producto_actual"] = "Sesión caída, esperando relogin automático..."
+            avisado = True
+        time.sleep(2)
+    if avisado:
+        logger.info("Sesión de Perú Compras recuperada, se continúa donde se quedó")
+
 # --- descubrimiento de acuerdos (HTML) --------------------------------------
 # OJO — CALIBRAR: el <select id="ajaxAcuerdo"> podría venir vacío en el
 # HTML plano si Perú Compras lo llena por AJAX en vez de renderizarlo en
@@ -320,36 +357,35 @@ import requests as _requests_lib  # alias local, evita chocar con el nombre 'req
 MAX_REINTENTOS_CONEXION = 4
 ESPERA_BASE_REINTENTO = 1.5  # segundos — backoff exponencial: 1.5, 3, 6, 12
 
+def _post_precio(pc_session, id_producto: int, moneda: str, precio: float):
+    """Una request a Inserta_ProductoOfertadoTMP, esperando antes a que haya sesión."""
+    _esperar_sesion(pc_session)
+    with pc_session.request_lock:
+        sess = pc_session.session
+        if sess is None:
+            raise _requests_lib.exceptions.ConnectionError("Sesión de Perú Compras no disponible (relogin en curso)")
+        resp = sess.post(
+            URL_INSERTA_PRECIO,
+            data={"N_CatalogoProducto": str(id_producto), "C_MonedaOfertada": moneda, "N_PrecioOfertado": f"{precio:.2f}"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            timeout=30,
+        )
+        if "AccesoGeneral" in (resp.url or ""):
+            # Nos mandó a la pantalla de login: la sesión está muerta. NO es un precio aceptado.
+            raise RespuestaPeruComprasInvalida("Probar precio", resp)
+        return resp
+
 
 def _probar_precio(pc_session, id_producto: int, moneda: str, precio: float) -> bool:
     """
-    Cada llamada toma el lock SOLO para esta única request HTTP (no para
-    toda una búsqueda de precio máximo). Así, mientras una corrida larga
-    está probando cientos de valores, un vistazo rápido desde /vivo puede
-    colarse entre request y request en vez de quedarse esperando a que
-    termine el producto entero.
-
-    REINTENTOS DE CONEXIÓN (nuevo): con el algoritmo de pasos finos
-    (FACTOR_CRECIMIENTO_FASE1), una corrida puede mandar 100+ requests
-    seguidas por producto. Perú Compras (o un WAF delante) a veces corta
-    la conexión en seco ("RemoteDisconnected: Remote end closed
-    connection without response") bajo esa carga sostenida — no es un
-    error de negocio, es la conexión TCP muriendo sin dar respuesta.
-    Reintentamos con backoff exponencial antes de rendirnos; si TODOS
-    los reintentos fallan, dejamos que la excepción suba (la maneja el
-    try/except por producto en _tarea_ofertas, que ya no tumba toda la
-    corrida — ver ese bloque).
+    True si Perú Compras aceptó el precio. Toma el lock solo por request.
+    Reintenta con backoff si la conexión muere, y espera el relogin si
+    la sesión se cayó.
     """
     ultimo_error = None
     for intento in range(MAX_REINTENTOS_CONEXION):
         try:
-            with pc_session.request_lock:
-                resp = pc_session.session.post(
-                    URL_INSERTA_PRECIO,
-                    data={"N_CatalogoProducto": str(id_producto), "C_MonedaOfertada": moneda, "N_PrecioOfertado": f"{precio:.2f}"},
-                    headers={"X-Requested-With": "XMLHttpRequest"},
-                    timeout=30,
-                )
+            resp = _post_precio(pc_session, id_producto, moneda, precio)
             rechazado = es_rechazado(resp.ok, resp.text)
             time.sleep(PAUSA_ENTRE_REQUESTS)
             return not rechazado
@@ -362,39 +398,23 @@ def _probar_precio(pc_session, id_producto: int, moneda: str, precio: float) -> 
                     precio, id_producto, intento + 1, MAX_REINTENTOS_CONEXION, espera, e,
                 )
                 time.sleep(espera)
-    # Se agotaron los reintentos: dejamos que suba, para que el llamador
-    # (búsqueda de un producto, guardado manual, envío de oferta) decida
-    # cómo manejar esta falla persistente en vez de fingir un resultado.
     raise ultimo_error
+
 
 
 VALOR_CANARIO_INVALIDO = 999_999.99
 # Muy por encima de cualquier precio real y del propio techo de
 # seguridad. Cualquier validación real de Perú Compras debería
-# rechazarlo. Si en cambio lo "acepta", significa que el mensaje de
-# rechazo de ESTE producto/catálogo no coincide con nada de lo que
-# es_rechazado sabe reconocer — y confiar en la escalera normal
-# terminaría trepando derecho hasta el techo (500.00) sin haber
-# encontrado nunca un máximo real.
+# rechazarlo. Si en cambio lo "acepta", el mensaje de rechazo de ESTE
+# producto no coincide con nada de lo que es_rechazado sabe reconocer.
+
 
 def _probar_precio_con_diagnostico(pc_session, id_producto: int, moneda: str, precio: float) -> tuple[bool, str]:
-    """
-    Igual que _probar_precio pero además devuelve el texto crudo de la
-    respuesta, para poder diagnosticar por qué algo se consideró
-    aceptado o rechazado. Solo se usa en el canario y en el resultado
-    final del techo — no en el loop caliente de la búsqueda normal,
-    para no cargar memoria/logs de más en las ~100 llamadas por producto.
-    """
+    """Igual que _probar_precio pero devuelve también el texto crudo de la respuesta."""
     ultimo_error = None
     for intento in range(MAX_REINTENTOS_CONEXION):
         try:
-            with pc_session.request_lock:
-                resp = pc_session.session.post(
-                    URL_INSERTA_PRECIO,
-                    data={"N_CatalogoProducto": str(id_producto), "C_MonedaOfertada": moneda, "N_PrecioOfertado": f"{precio:.2f}"},
-                    headers={"X-Requested-With": "XMLHttpRequest"},
-                    timeout=30,
-                )
+            resp = _post_precio(pc_session, id_producto, moneda, precio)
             aceptado = not es_rechazado(resp.ok, resp.text)
             time.sleep(PAUSA_ENTRE_REQUESTS)
             return aceptado, resp.text
@@ -757,18 +777,14 @@ def _resolver_run_id(uid: str, run_id: int) -> int:
 
 
 PAGINA_CORRIDA = 100        # filas por request al listar productos en la corrida
-REINTENTOS_PAGINA = 4       # reintentos por página si Perú Compras responde vacío / se corta
+REINTENTOS_PAGINA = 12      # reintentos por página (cubre un relogin completo con captcha)
 
 
 def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_categoria: str) -> list[dict]:
     """
     Descarga TODOS los productos de una categoría para la búsqueda de precios
-    máximos. A diferencia de _obtener_productos:
-      - páginas de 100 filas (como /vivo-carga) en vez de 500
-      - toma el lock SOLO por página, no durante toda la descarga
-      - reintenta una página si Perú Compras responde vacío o se corta la conexión
-      - revisa la cancelación entre páginas
-      - deja el avance en _estado_ofertas para que la pantalla no se quede en 0/0
+    máximos. Si la sesión se cae a mitad de la descarga, espera el relogin
+    y reintenta la MISMA página (no pierde lo ya descargado).
     """
     productos: list[dict] = []
     start = 0
@@ -777,6 +793,7 @@ def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_ca
         ultimo_error: Optional[Exception] = None
         for intento in range(REINTENTOS_PAGINA):
             try:
+                _esperar_sesion(pc_session)
                 with pc_session.request_lock:
                     filas, total = _pagina_productos(
                         pc_session.session, n_acuerdo, n_catalogo, n_categoria, start, PAGINA_CORRIDA
@@ -788,7 +805,7 @@ def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_ca
                     "Página start=%d de la categoría %s falló (intento %d/%d): %s",
                     start, n_categoria, intento + 1, REINTENTOS_PAGINA, e,
                 )
-                time.sleep(3 * (intento + 1))
+                time.sleep(min(3 * (intento + 1), 15))
                 _verificar_cancelacion()
         else:
             raise ultimo_error
@@ -804,6 +821,12 @@ def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_ca
     return productos
 
 
+def _sesion_viva(pc_session):
+    """Espera el relogin si hace falta y devuelve la sesión actual (no una copia vieja)."""
+    _esperar_sesion(pc_session)
+    return pc_session.session
+
+
 def _recolectar_productos(
     pc_session, n_acuerdo_filtro, n_catalogo_filtro, n_categoria_filtro, en_corrida: bool = False
 ) -> list[dict]:
@@ -812,25 +835,28 @@ def _recolectar_productos(
     lista de productos, incluyendo el precio actual que YA tiene puesto el
     portal (N_PrecioOfertado). Con en_corrida=True (búsqueda de precios
     máximos) descarga por páginas chicas con reintentos, se puede cancelar
-    y muestra el avance.
+    y muestra el avance. La sesión se lee de nuevo en cada paso, para
+    sobrevivir a un relogin a mitad del recorrido.
     """
-    session = pc_session.session
     if n_acuerdo_filtro:
         texto_filtro = dict(ACUERDOS_RESPALDO).get(n_acuerdo_filtro, n_acuerdo_filtro)
         acuerdos = [(n_acuerdo_filtro, texto_filtro)]
     else:
+        sess = _sesion_viva(pc_session)
         with pc_session.request_lock:
-            acuerdos = _obtener_acuerdos(session)
+            acuerdos = _obtener_acuerdos(sess)
 
     productos_totales: list[dict] = []
     for n_acuerdo, texto_acuerdo in acuerdos:
+        sess = _sesion_viva(pc_session)
         with pc_session.request_lock:
-            catalogos = _obtener_catalogos(session, n_acuerdo)
+            catalogos = _obtener_catalogos(sess, n_acuerdo)
         if n_catalogo_filtro:
             catalogos = [c for c in catalogos if c["value"] == n_catalogo_filtro]
         for catalogo in catalogos:
+            sess = _sesion_viva(pc_session)
             with pc_session.request_lock:
-                categorias = _obtener_categorias(session, catalogo["value"])
+                categorias = _obtener_categorias(sess, catalogo["value"])
             if n_categoria_filtro:
                 categorias = [c for c in categorias if c["value"] == n_categoria_filtro]
             for categoria in categorias:
@@ -838,8 +864,9 @@ def _recolectar_productos(
                     _verificar_cancelacion()
                     filas = _obtener_productos_corrida(pc_session, n_acuerdo, catalogo["value"], categoria["value"])
                 else:
+                    sess = _sesion_viva(pc_session)
                     with pc_session.request_lock:
-                        filas = _obtener_productos(session, n_acuerdo, catalogo["value"], categoria["value"])
+                        filas = _obtener_productos(sess, n_acuerdo, catalogo["value"], categoria["value"])
                 for fila in filas:
                     productos_totales.append({
                         "id_catalogo_producto": fila["N_CatalogoProducto"],
@@ -1176,6 +1203,9 @@ PAGINA_VIVO = 100      # filas por request a Perú Compras
 
 
 def _pagina_productos(session, n_acuerdo, n_catalogo, n_categoria, start, length):
+    if session is None:
+        # La sesión se está reloguéando; el llamador reintenta esta misma página.
+        raise _requests_lib.exceptions.ConnectionError("Sesión de Perú Compras no disponible (relogin en curso)")
     form = {
         "draw": "1", **_columnas_datatable(),
         "order[0][column]": "0", "order[0][dir]": "asc",

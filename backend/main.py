@@ -83,6 +83,8 @@ from routers import perucompras_stock_router as perucompras_stock_router_mod
 from routers import perucompras_plazo_router as perucompras_plazo_router_mod
 from routers import ofertas_router as ofertas_router_mod
 
+from routers import sesion_espejo_router as sesion_espejo_router_mod
+
 
 from routers import historial_comercial as historial_comercial_mod
 
@@ -172,6 +174,7 @@ app.include_router(perucompras_stock_router_mod.router)
 app.include_router(perucompras_plazo_router_mod.router)
 app.include_router(ofertas_router_mod.router)
 
+app.include_router(sesion_espejo_router_mod.router)
 
 app.include_router(historial_comercial_mod.router)
 
@@ -748,6 +751,10 @@ def perucompras_login(body: PeruComprasUidRequest):
         raise HTTPException(status_code=404, detail=f"Usuario '{body.uid}' no configurado en .env")
     if sesion.estado == "cargando":
         return {"ok": True, "detalle": "Login ya en progreso"}
+    if sesion.modo_espejo and sesion.autenticado:
+        # Sesión copiada de otra persona: un login normal la echaría. No se hace nada.
+        perucompras_sesiones.set_activo(body.uid)
+        return {"ok": True, "detalle": "Sesión en modo espejo ya activa; no se inicia login para no echar a la persona"}
     perucompras_sesiones.login_async(body.uid)
     perucompras_sesiones.set_activo(body.uid)
     return {"ok": True, "detalle": f"Login iniciado en background — usuario {body.uid}"}
@@ -776,6 +783,8 @@ def perucompras_login_manual(body: PeruComprasLoginManualRequest):
 
     if sesion.estado == "cargando":
         return {"ok": True, "uid": uid, "detalle": "Login ya en progreso"}
+    if sesion.modo_espejo and sesion.autenticado:
+        return {"ok": True, "uid": uid, "detalle": "Sesión en modo espejo ya activa; no se inicia login para no echar a la persona"}
 
     perucompras_sesiones.login_async(uid)
     perucompras_sesiones.set_activo(uid)

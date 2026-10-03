@@ -209,6 +209,7 @@ class PeruComprasSession:
         self.cookies_list = None
         self.usuario = None
         self.password = None
+        self.modo_espejo = False  # True = sesión copiada de un navegador real (nunca hace relogin)
 
         self.estado = "desconectado"  # desconectado | cargando | activa | perdida
         self.login_lock = threading.Lock()
@@ -242,6 +243,7 @@ class PeruComprasSession:
         # perfil en paralelo y chocaban ("session not created: Chrome
         # instance exited"), dejando el frontend pegado en "cargando".
         with self.login_lock:
+            self.modo_espejo = False
             self.estado = "cargando"
             self.usuario = usuario
             self.password = password
@@ -347,6 +349,10 @@ class PeruComprasSession:
         """
         if self.estado != "activa":
             return  # ya se está manejando (cargando/perdida/desconectado) — no duplicar el relogin
+        if self.modo_espejo:
+            # Sesión copiada de un navegador real: NO se reloguea (echaría a la persona).
+            self._espejo_caida(motivo or "reportada por un request")
+            return
         logger.warning(f"Sesión de '{self.usuario}' marcada como perdida externamente: {motivo}")
         self.estado = "perdida"
         threading.Thread(target=self._recuperar_tras_perdida_externa, daemon=True).start()
@@ -388,9 +394,103 @@ class PeruComprasSession:
                     logger.warning(f"Error en callback on_sesion_fallida: {e}")
 
 
+    # ============================================================
+    # MODO ESPEJO: usa las cookies de una sesión que una persona ya
+    # tiene abierta en su navegador. NO hace login, así que Perú
+    # Compras no ve un segundo inicio de sesión y no echa a nadie.
+    # Si la sesión cae, NO reloguea: pide pegar las cookies de nuevo.
+    # ============================================================
+    @staticmethod
+    def _url_es_login(url: str) -> bool:
+        u = (url or "").lower()
+        return "login" in u or "accesogeneral" in u
+
+    def login_espejo(self, usuario: str, cookies_list: list) -> tuple[bool, str]:
+        with self.login_lock:
+            s = _session_desde_cookies(cookies_list)
+            try:
+                with self.request_lock:
+                    r = s.get(BASE_URL + "/Home/Index", timeout=25, allow_redirects=True)
+            except Exception as e:
+                return False, f"No se pudo contactar a Perú Compras: {e}"
+
+            if r.status_code != 200 or self._url_es_login(r.url):
+                return False, (
+                    "Perú Compras rechazó esas cookies: la sesión ya expiró, se copiaron incompletas, "
+                    "o el portal liga la sesión a la IP/navegador original. "
+                    f"(HTTP {r.status_code}, terminó en {r.url})"
+                )
+
+            # Cookies válidas: se descarta cualquier driver propio y se adopta la sesión copiada.
+            try:
+                if self.driver:
+                    self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
+            self.usuario = usuario
+            self.cookies_list = cookies_list
+            self.session = s
+            self.modo_espejo = True
+            self.estado = "activa"
+            logger.info(f"MODO ESPEJO activo para '{usuario}' — sin login, no se echa a nadie")
+            self._iniciar_keepalive()
+            if self.on_login_exitoso:
+                try:
+                    self.on_login_exitoso()
+                except Exception as e:
+                    logger.warning(f"Error en callback on_login_exitoso: {e}")
+            return True, ""
+
+    def _keepalive_espejo(self):
+        if self.estado == "perdida":
+            # Otro componente (ej. el monitor) detectó que murió: se cierra limpio, sin relogin.
+            self._espejo_caida("otro proceso detectó que la sesión murió")
+            return
+        if self.estado != "activa" or self.session is None:
+            return
+        try:
+            with self.request_lock:
+                r = self.session.get(BASE_URL + "/Home/Index", timeout=25, allow_redirects=True)
+        except Exception as e:
+            # Error de red pasajero: no se da por caída, se reintenta en el próximo ciclo.
+            logger.warning(f"Modo espejo: ping falló por red ({e}), se reintenta luego")
+            return
+        if r.status_code == 200 and not self._url_es_login(r.url):
+            logger.info("Modo espejo: la sesión sigue viva")
+            return
+        self._espejo_caida(f"el ping terminó en {r.url} (HTTP {r.status_code})")
+
+    def _espejo_caida(self, motivo: str):
+        logger.warning(
+            f"Modo espejo: sesión caída ({motivo}). NO se hace relogin para no echar a la persona; "
+            f"hay que pegar las cookies de nuevo."
+        )
+        usuario_actual = self.usuario
+        self.session = None
+        self.estado = "desconectado"
+        self.modo_espejo = False
+        for cb in (self.on_sesion_perdida, self.on_sesion_fallida):
+            if cb:
+                try:
+                    cb(usuario_actual)
+                except Exception as e:
+                    logger.warning(f"Error en callback de sesión caída (espejo): {e}")
+
     def logout(self):
+        era_espejo = self.modo_espejo
+        self.modo_espejo = False
         self.keepalive_stop.set()
         usuario_actual = self.usuario
+        if era_espejo:
+            # Modo espejo: solo se sueltan las cookies copiadas. NO se llama a ningún
+            # logout del portal y NO se toca Chrome: la sesión real de la persona sigue viva.
+            self.driver = None
+            self.session = None
+            self.cookies_list = None
+            self.estado = "desconectado"
+            logger.info(f"Modo espejo desconectado para '{usuario_actual}' (la sesión de la persona sigue abierta)")
+            return
         try:
             if self.driver:
                 self.driver.quit()
@@ -409,6 +509,9 @@ class PeruComprasSession:
     # -------- keep-alive: mismo patrón que rapifich_api.py --------
     def _keepalive_loop(self):
         while not self.keepalive_stop.wait(KEEPALIVE_INTERVAL):
+            if self.modo_espejo:
+                self._keepalive_espejo()
+                continue
             if self.estado != "activa" or not self.driver:
                 continue
             try:
@@ -615,6 +718,7 @@ class SesionesPeruCompras:
                 "label": self.usuarios[uid]["label"],
                 "autenticado": s.autenticado,
                 "estado": s.estado,
+                "espejo": s.modo_espejo,
             }
             for uid, s in self.sesiones.items()
         }

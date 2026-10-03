@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Briefcase,
   Search,
@@ -34,6 +34,7 @@ interface EstadoUsuarioPeru {
   label: string;
   autenticado: boolean;
   estado: string;
+  espejo?: boolean;
 }
 
 interface SesionEstadoResp {
@@ -317,6 +318,10 @@ export default function EquipoVentasOperaciones({ apiBase }: EquipoVentasOperaci
   const [manualUsuario, setManualUsuario] = useState("");
   const [manualPassword, setManualPassword] = useState("");
 
+  const [mostrarEspejo, setMostrarEspejo] = useState(false);
+  const [espejoUid, setEspejoUid] = useState("");
+  const [espejoCookies, setEspejoCookies] = useState("");
+
   const cargarEstadoSesion = useCallback(async () => {
     try {
       const r = await fetch(`${apiBase}/sesion/estado`);
@@ -492,6 +497,71 @@ const MAX_REINTENTOS_LOGIN = 2; // + el intento inicial = 3 intentos totales
   };
 
 
+  // Recuerda si la sesión activa era espejo, para explicar el motivo si se cae.
+  const espejoVistoRef = useRef(false);
+
+  useEffect(() => {
+    if (!uidActivo || !sesion) return;
+    const info = sesion.perucompras[uidActivo];
+    if (!info) return;
+    if (info.autenticado && info.espejo) {
+      espejoVistoRef.current = true;
+      return;
+    }
+    if (espejoVistoRef.current && !info.autenticado) {
+      espejoVistoRef.current = false;
+      setMostrarEspejo(true);
+      setEspejoUid(uidActivo);
+      setErrorLogin(
+        "La sesión espejo se cayó: la persona cerró sesión en Perú Compras, la sesión expiró o el portal la invalidó. " +
+          "El bot NO inicia sesión por su cuenta para no echarla. Cuando esa persona esté de nuevo dentro del portal, " +
+          "pega las cookies otra vez. Si había una búsqueda de precios en curso, se detuvo: relánzala con " +
+          "'Saltar productos ya calculados' marcado y continúa donde quedó."
+      );
+    }
+  }, [sesion, uidActivo]);
+
+  // Refresca el estado de la sesión cada 10 s mientras hay una activa.
+  useEffect(() => {
+    if (!uidActivo) return;
+    const t = setInterval(() => {
+      cargarEstadoSesion();
+    }, 10000);
+    return () => clearInterval(t);
+  }, [uidActivo, cargarEstadoSesion]);
+
+  const loginEspejo = async () => {
+    if (!espejoUid) {
+      setErrorLogin("Elige el usuario del que copiaste la sesión.");
+      return;
+    }
+    if (!espejoCookies.trim()) {
+      setErrorLogin("Pega el valor del header Cookie.");
+      return;
+    }
+    setErrorLogin("");
+    setCargandoLogin("__espejo__");
+    try {
+      const r = await fetch(`${apiBase}/sesion/perucompras/login-espejo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: espejoUid, cookies: espejoCookies }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `Error HTTP ${r.status}`);
+      }
+      await cargarEstadoSesion();
+      await cargarUsuarios();
+      setEspejoCookies("");
+      setUidActivo(espejoUid);
+    } catch (e) {
+      setErrorLogin(e instanceof Error ? e.message : "No se pudo conectar en modo espejo");
+    } finally {
+      setCargandoLogin(null);
+    }
+  };
+
 const [cerrandoSesionReal, setCerrandoSesionReal] = useState(false);
 
   const cerrarSesionRealPeru = async () => {
@@ -523,8 +593,8 @@ const [cerrandoSesionReal, setCerrandoSesionReal] = useState(false);
 
 
 const cerrarSesionPeru = () => {
+    espejoVistoRef.current = false;
     setUidActivo("");
-
     // Reset total del estado dependiente del usuario anterior.
     // Sin esto, al loguear con otro usuario seguías viendo la
     // búsqueda/paginación/filtros del usuario anterior hasta volver
@@ -929,6 +999,61 @@ const proformasFiltradas = useMemo(() => {
             )}
           </div>
 
+          <div className="pt-4 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setMostrarEspejo((v) => !v)}
+              className="text-xs font-semibold text-emerald-700 hover:underline"
+            >
+              {mostrarEspejo
+                ? "Ocultar modo espejo"
+                : "Modo espejo: usar la sesión que ya está abierta (no echa a nadie)"}
+            </button>
+
+            {mostrarEspejo && (
+              <div className="mt-3 space-y-3">
+                <p className="text-[11px] leading-snug text-slate-500">
+                  En la PC donde ya estás logueado en Perú Compras: F12 → pestaña <strong>Network</strong> → F5 →
+                  clic en una petición a <strong>catalogos.perucompras.gob.pe</strong> → <strong>Request Headers</strong> →
+                  copia el valor completo de <strong>Cookie</strong> y pégalo aquí. No cierres sesión en esa PC
+                  mientras el bot trabaja, y evita usar el portal en ese momento.
+                </p>
+                <select
+                  value={espejoUid}
+                  onChange={(e) => setEspejoUid(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Usuario del que copiaste la sesión...</option>
+                  {usuariosDisponibles.map((u) => (
+                    <option key={u.uid} value={u.uid}>
+                      {u.label}
+                    </option>
+                  ))}
+                </select>
+                <textarea
+                  rows={4}
+                  value={espejoCookies}
+                  onChange={(e) => setEspejoCookies(e.target.value)}
+                  placeholder="ASP.NET_SessionId=...; .ASPXAUTH=...; ..."
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={loginEspejo}
+                  disabled={cargandoLogin === "__espejo__"}
+                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-40 transition-colors"
+                >
+                  {cargandoLogin === "__espejo__" ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <LogIn size={15} />
+                  )}
+                  Conectar en modo espejo
+                </button>
+              </div>
+            )}
+          </div>
+
           {mensajeEsperaLogin && (
             <p className="flex items-center gap-1.5 text-xs text-amber-600">
               <Loader2 size={13} className="animate-spin" /> {mensajeEsperaLogin}
@@ -961,6 +1086,11 @@ const proformasFiltradas = useMemo(() => {
             </h1>
             <p className="text-sm text-slate-500">
               Sesión activa: <span className="font-semibold text-slate-700">{sesion?.perucompras[uidActivo]?.label}</span>
+              {sesion?.perucompras[uidActivo]?.espejo && (
+                <span className="ml-2 text-[10px] font-semibold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
+                  MODO ESPEJO
+                </span>
+              )}
             </p>
           </div>
         </div>
