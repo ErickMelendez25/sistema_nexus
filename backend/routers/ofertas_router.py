@@ -102,7 +102,8 @@ PRECISION = 0.01
 FACTORES_CASCADA_FASE1 = [1.5, 1.15, 1.03]
 MAX_ITER_FASE2 = 40
 MAX_ITER_FASE3 = 30
-PAUSA_ENTRE_REQUESTS = 0.12  # respiro por request, evita gatillar un WAF/rate-limit
+PAUSA_ENTRE_REQUESTS = 0.25  # respiro por request, evita gatillar un WAF/rate-limit
+PAUSA_ENTRE_PRODUCTOS = 0.5  # respiro extra entre un producto y el siguiente
 # Techo de seguridad — LÍMITE DE NEGOCIO, no solo técnico: un producto
 # de este catálogo no tiene sentido que valga más que esto. Perú Compras
 # puede llegar a aceptar valores absurdos (se vieron casos ~8,000,000),
@@ -150,17 +151,16 @@ TIMEOUT_ESPERA_SESION = 180  # segundos máximos esperando que termine el relogi
 
 def _esperar_sesion(pc_session, timeout: int = TIMEOUT_ESPERA_SESION):
     """
-    Si la sesión se perdió y el sistema está reloguéandose
-    (pc_session.session is None), espera aquí hasta que vuelva.
-    NO debe llamarse con el request_lock tomado (el relogin podría
-    necesitarlo). Respeta la cancelación del usuario.
+    Espera hasta que la sesión esté ACTIVA y utilizable. Cubre también el
+    momento en que la sesión ya se marcó como perdida pero todavía no se
+    reemplazó. Si el sistema se rindió (estado 'desconectado'), corta con
+    un mensaje claro. NO llamar con el request_lock tomado.
     """
     limite = time.time() + timeout
     avisado = False
-    while pc_session.session is None:
+    while pc_session.session is None or pc_session.estado != "activa":
         _verificar_cancelacion()
         if pc_session.estado == "desconectado":
-            # El sistema se rindió (o es modo espejo y cayó): no hay relogin en camino.
             raise SesionNoDisponible(
                 "La sesión de Perú Compras se cayó y no se va a reconectar sola. "
                 "Si usas modo espejo, pega las cookies de nuevo y relanza la búsqueda "
@@ -357,23 +357,43 @@ import requests as _requests_lib  # alias local, evita chocar con el nombre 'req
 MAX_REINTENTOS_CONEXION = 4
 ESPERA_BASE_REINTENTO = 1.5  # segundos — backoff exponencial: 1.5, 3, 6, 12
 
+def _es_pantalla_login(resp) -> bool:
+    """True si Perú Compras respondió con la pantalla de login en vez de la respuesta esperada."""
+    url = (getattr(resp, "url", "") or "").lower()
+    if "accesogeneral" in url:
+        return True
+    cuerpo = (getattr(resp, "text", "") or "")[:5000].lower()
+    return "codigocaptcha" in cuerpo
+
+
 def _post_precio(pc_session, id_producto: int, moneda: str, precio: float):
-    """Una request a Inserta_ProductoOfertadoTMP, esperando antes a que haya sesión."""
-    _esperar_sesion(pc_session)
-    with pc_session.request_lock:
-        sess = pc_session.session
-        if sess is None:
-            raise _requests_lib.exceptions.ConnectionError("Sesión de Perú Compras no disponible (relogin en curso)")
-        resp = sess.post(
-            URL_INSERTA_PRECIO,
-            data={"N_CatalogoProducto": str(id_producto), "C_MonedaOfertada": moneda, "N_PrecioOfertado": f"{precio:.2f}"},
-            headers={"X-Requested-With": "XMLHttpRequest"},
-            timeout=30,
+    """
+    Una request a Inserta_ProductoOfertadoTMP. Si la sesión murió (respuesta = pantalla de
+    login), NO la toma como "aceptado": la marca como perdida, espera el relogin y reintenta
+    el mismo precio, para que la corrida continúe sola.
+    """
+    resp = None
+    for _ in range(3):
+        _esperar_sesion(pc_session)
+        with pc_session.request_lock:
+            sess = pc_session.session
+            if sess is None:
+                raise _requests_lib.exceptions.ConnectionError("Sesión de Perú Compras no disponible (relogin en curso)")
+            resp = sess.post(
+                URL_INSERTA_PRECIO,
+                data={"N_CatalogoProducto": str(id_producto), "C_MonedaOfertada": moneda, "N_PrecioOfertado": f"{precio:.2f}"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+                timeout=30,
+            )
+        if not _es_pantalla_login(resp):
+            return resp
+        logger.warning(
+            "Perú Compras devolvió la pantalla de login probando %.2f del producto %s: la sesión murió. Esperando relogin...",
+            precio, id_producto,
         )
-        if "AccesoGeneral" in (resp.url or ""):
-            # Nos mandó a la pantalla de login: la sesión está muerta. NO es un precio aceptado.
-            raise RespuestaPeruComprasInvalida("Probar precio", resp)
-        return resp
+        pc_session.marcar_sesion_perdida(motivo="Inserta_ProductoOfertadoTMP devolvió la pantalla de login")
+        time.sleep(3)
+    raise RespuestaPeruComprasInvalida("Probar precio", resp)
 
 
 def _probar_precio(pc_session, id_producto: int, moneda: str, precio: float) -> bool:
@@ -782,9 +802,8 @@ REINTENTOS_PAGINA = 12      # reintentos por página (cubre un relogin completo 
 
 def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_categoria: str) -> list[dict]:
     """
-    Descarga TODOS los productos de una categoría para la búsqueda de precios
-    máximos. Si la sesión se cae a mitad de la descarga, espera el relogin
-    y reintenta la MISMA página (no pierde lo ya descargado).
+    Descarga TODOS los productos de una categoría, página por página (100 filas). Si la sesión
+    se cae a mitad, espera el relogin y reintenta la MISMA página sin perder lo ya descargado.
     """
     productos: list[dict] = []
     start = 0
@@ -805,6 +824,11 @@ def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_ca
                     "Página start=%d de la categoría %s falló (intento %d/%d): %s",
                     start, n_categoria, intento + 1, REINTENTOS_PAGINA, e,
                 )
+                # Una respuesta inválida suelta puede ser un tropiezo del portal; dos seguidas = sesión muerta.
+                if isinstance(e, RespuestaPeruComprasInvalida) and intento >= 1:
+                    pc_session.marcar_sesion_perdida(
+                        motivo="la descarga de la lista recibió respuestas inválidas seguidas"
+                    )
                 time.sleep(min(3 * (intento + 1), 15))
                 _verificar_cancelacion()
         else:
@@ -817,7 +841,7 @@ def _obtener_productos_corrida(pc_session, n_acuerdo: str, n_catalogo: str, n_ca
         start += PAGINA_CORRIDA
         if not filas or start >= total:
             break
-        time.sleep(0.05)
+        time.sleep(0.4)
     return productos
 
 
@@ -919,6 +943,8 @@ def _tarea_ofertas(
         "terminado_en": None, "error": None, "run_id": run_id,
         "cancelado": False,
     })
+    if pc_session:
+        pc_session.trabajo_activo.set()  # el keep-alive no hace ping mientras dure la búsqueda
     if m:
         m.pausar()
     try:
@@ -995,6 +1021,7 @@ def _tarea_ofertas(
                 _guardar_resultado(run_id, producto, resultado_error)
 
             _estado_ofertas["productos_completados"] += 1
+            time.sleep(PAUSA_ENTRE_PRODUCTOS)
 
         _cerrar_run(run_id, "completado", None, _estado_ofertas["total_productos"])
     except RespuestaPeruComprasInvalida as e:
@@ -1024,6 +1051,8 @@ def _tarea_ofertas(
         _cerrar_run(run_id, "error", str(e), _estado_ofertas.get("total_productos", 0))
     finally:
         _cancelar_ofertas.clear()
+        if pc_session:
+            pc_session.trabajo_activo.clear()
         if m:
             m.reanudar()
         _estado_ofertas["corriendo"] = False

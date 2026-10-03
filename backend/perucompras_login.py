@@ -210,6 +210,9 @@ class PeruComprasSession:
         self.usuario = None
         self.password = None
         self.modo_espejo = False  # True = sesión copiada de un navegador real (nunca hace relogin)
+        # Mientras esté activa, el keep-alive NO hace ping: una tarea larga (búsqueda de
+        # precios) ya mantiene viva la sesión con sus propios requests, y un ping extra la cruza.
+        self.trabajo_activo = threading.Event()
 
         self.estado = "desconectado"  # desconectado | cargando | activa | perdida
         self.login_lock = threading.Lock()
@@ -508,76 +511,83 @@ class PeruComprasSession:
 
     # -------- keep-alive: mismo patrón que rapifich_api.py --------
     def _keepalive_loop(self):
+        fallos_seguidos = 0
         while not self.keepalive_stop.wait(KEEPALIVE_INTERVAL):
             if self.modo_espejo:
-                self._keepalive_espejo()
+                if not self.trabajo_activo.is_set():
+                    self._keepalive_espejo()
                 continue
             if self.estado != "activa" or not self.driver:
                 continue
+            if self.trabajo_activo.is_set():
+                # Hay una búsqueda corriendo: sus requests mantienen viva la sesión. No se cruza.
+                fallos_seguidos = 0
+                continue
+
+            sesion_muerta = False
             try:
                 with self.login_lock:
-                    self.driver.get(BASE_URL + "/Home/Index")
-                    time.sleep(2)
-                    nuevas_cookies = self.driver.get_cookies()
-                    nueva_session = _session_desde_cookies(nuevas_cookies)
-                    r_test = nueva_session.get(BASE_URL + "/Home/Index", timeout=20, allow_redirects=True)
-                    if r_test.status_code == 200 and "login" not in r_test.url.lower():
-                        self.session = nueva_session
-                        self.cookies_list = nuevas_cookies
-                        logger.info("Sesión Peru Compras renovada automáticamente (keep-alive)")
-                    else:
-                        raise ValueError(f"URL inesperada: {r_test.url}")
-            except Exception:
-                logger.warning("Keep-alive falló — la sesión se perdió (probablemente otro usuario entró con las mismas credenciales)")
-                estado_previo = self.estado
-                self.estado = "perdida"
+                    with self.request_lock:  # ningún otro request al mismo tiempo
+                        self.driver.get(BASE_URL + "/Home/Index")
+                        time.sleep(2)
+                        nuevas_cookies = self.driver.get_cookies()
+                        nueva_session = _session_desde_cookies(nuevas_cookies)
+                        r_test = nueva_session.get(BASE_URL + "/Home/Index", timeout=30, allow_redirects=True)
+                        if r_test.status_code == 200 and not self._url_es_login(r_test.url):
+                            self.session = nueva_session
+                            self.cookies_list = nuevas_cookies
+                            fallos_seguidos = 0
+                            logger.info("Sesión Peru Compras renovada automáticamente (keep-alive)")
+                        else:
+                            sesion_muerta = True
+            except Exception as e:
+                # Un timeout o corte de red pasajero NO es una sesión muerta.
+                fallos_seguidos += 1
+                logger.warning(f"Keep-alive: error pasajero ({type(e).__name__}: {e}) — fallo {fallos_seguidos}/3")
+                if fallos_seguidos >= 3:
+                    sesion_muerta = True
 
-                # Todo esto (matar driver viejo + intentar relogin) debe
-                # ir bajo el MISMO candado que usa login() — así, si en
-                # ese instante alguien le da clic manual a "Iniciar
-                # sesión" para este mismo uid, uno de los dos espera su
-                # turno en vez de pelear por el mismo perfil de Chrome.
-                with self.login_lock:
-                    usuario_actual = self.usuario
-                    try:
-                        if self.driver:
-                            self.driver.quit()
-                    except Exception:
-                        pass
-                    self.driver = None
-                    self.session = None
-                    _limpiar_chrome_de(usuario_actual) if usuario_actual else None
+            if not sesion_muerta:
+                continue
 
-                if estado_previo == "activa" and self.on_sesion_perdida:
+            fallos_seguidos = 0
+            logger.warning("Keep-alive falló — la sesión se perdió (probablemente otro usuario entró con las mismas credenciales)")
+            estado_previo = self.estado
+            self.estado = "perdida"
+
+            with self.login_lock:
+                usuario_actual = self.usuario
+                try:
+                    if self.driver:
+                        self.driver.quit()
+                except Exception:
+                    pass
+                self.driver = None
+                self.session = None
+                _limpiar_chrome_de(usuario_actual) if usuario_actual else None
+
+            if estado_previo == "activa" and self.on_sesion_perdida:
+                try:
+                    self.on_sesion_perdida(self.usuario)
+                except Exception as e:
+                    logger.warning(f"Error en callback on_sesion_perdida: {e}")
+
+            relogin_ok = self._relogin_sincronizado()
+            if relogin_ok:
+                if self.on_sesion_recuperada:
                     try:
-                        self.on_sesion_perdida(self.usuario)
+                        self.on_sesion_recuperada(self.usuario)
                     except Exception as e:
-                        logger.warning(f"Error en callback on_sesion_perdida: {e}")
-
-                relogin_ok = self._relogin_sincronizado()
-                if relogin_ok:
-                    if self.on_sesion_recuperada:
-                        try:
-                            self.on_sesion_recuperada(self.usuario)
-                        except Exception as e:
-                            logger.warning(f"Error en callback on_sesion_recuperada: {e}")
-                else:
-                    # _relogin_sincronizado() ya agotó su intento y dejó
-                    # self.estado = "perdida" — sin esto, el sidebar (que
-                    # trata "perdida" IGUAL que "cargando", mostrando el
-                    # spinner anaranjado) se queda pensando que SIGUE
-                    # reconectando para siempre. Se fuerza "desconectado"
-                    # Y se avisa por WS con on_sesion_fallida — sin el
-                    # aviso, el frontend nunca refresca porque no hay
-                    # ningún WS listener para este caso.
-                    self.estado = "desconectado"
-                    if usuario_actual:
-                        _limpiar_chrome_de(usuario_actual)
-                    if self.on_sesion_fallida:
-                        try:
-                            self.on_sesion_fallida(usuario_actual)
-                        except Exception as e:
-                            logger.warning(f"Error en callback on_sesion_fallida: {e}")
+                        logger.warning(f"Error en callback on_sesion_recuperada: {e}")
+            else:
+                self.estado = "desconectado"
+                if usuario_actual:
+                    _limpiar_chrome_de(usuario_actual)
+                if self.on_sesion_fallida:
+                    try:
+                        self.on_sesion_fallida(usuario_actual)
+                    except Exception as e:
+                        logger.warning(f"Error en callback on_sesion_fallida: {e}")
 
     def _iniciar_keepalive(self):
         self.keepalive_stop.clear()
