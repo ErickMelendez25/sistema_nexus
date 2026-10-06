@@ -327,6 +327,69 @@ CLAVES_MARCA = ("marca", "marcaProducto", "marcaNombre", "brand")
 CLAVES_CATEGORIA = ("categoria", "categoriaProducto", "descripcionCortaProducto", "descripcionCorta")
 CLAVES_CATALOGO = ("catalogoEmpresa", "catalogo", "catalogoNombre")
 
+# ------------------------------------------------------------------
+# Categorías por diccionario (misma lógica que claveDiccionarioDeTexto
+# del frontend). El ERP no trae categoría, se calcula desde la descripción.
+# ------------------------------------------------------------------
+CLAVES_DICCIONARIO = [
+    "ESCOBILLONES", "LAVAVAJILLAS", "SUAVIZANTES_DE_ROPA", "DETERGENTES",
+    "REMOVEDORES_DE_SARRO", "DESINFECTANTES", "DESENGRASANTES", "ESPONJAS_Y_FIBRAS",
+    "SILICONA", "TINAS_Y_BATEAS", "TACHOS_BUZONES_Y_RECOLECTORES", "CERAS", "TOALLAS",
+    "ATRAPA_POLVO", "MOPAS_Y_TRAPEADORES", "ALCOHOL_ETILICO_GEL", "CEPILLO_DENTAL",
+    "LIMPIADORES", "RECOGEDORES", "AMBIENTADORES_Y_PASTILLAS", "JABON_HIGIENE_MANOS",
+    "PAPEL_HIGIENICO", "PAPEL_TOALLA", "PANOS_Y_BAYETAS", "PASTA_DENTAL",
+    "PULVERIZADORES_Y_ATOMIZADORES", "CARRITOS_PARA_LIMPIEZA", "JALADORES_DE_AGUA",
+    "HIPOCLORITO_DE_SODIO", "BASTONES_Y_MANGOS", "CEPILLOS_Y_ESCOBILLAS", "ESCOBAS",
+    "TUBO", "TUBOS_INST_ELECTRICAS", "REDUCCION", "TEE", "TUBOS_INST_SANITARIAS",
+    "CODO", "PEGAMENTO_TUBERIAS", "TAPON", "YEE", "UNION", "PINTURA_VIAL",
+    "PINTURA_ARQUITECTONICA", "BASE", "BIDON", "BALDE", "VASO", "PLATO",
+    "PLANCHA_PANEL_DRYWALL", "COLCHON", "CALAMINA_COBERTURA", "TABLEROS_MADERA",
+    "CAMA_METAL_2_NIVELES", "ARROZ_PILADO", "ACEITE_VEGETAL", "AZUCAR", "LENTEJA", "FRIJOL",
+    "RASTRILLO_DE_METAL", "AZADON", "NAVAJA_DE_INJERTAR", "LIMA_DE_AFILAR",
+    "MACHETE_CON_MANGO", "SERRUCHO_DE_PODA", "TIJERA_DE_PODAR", "HACHA", "HOZ",
+]
+_FILLER = {"DE", "Y", "PARA", "DEL", "LA", "EL", "LOS", "LAS", "CON", "SIN", "A"}
+
+
+def _norm_texto_cat(s: str) -> str:
+    s = unicodedata.normalize("NFD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c)).upper()
+    return re.sub(r"[^A-Z0-9]+", " ", s).strip()
+
+
+def _raiz(palabra: str) -> str:
+    b = palabra
+    if len(b) > 4 and b.endswith("ES"):
+        b = b[:-2]
+    elif len(b) > 3 and b.endswith("S"):
+        b = b[:-1]
+    return b[:6] if len(b) > 6 else b
+
+
+def _raices_de_clave(clave: str) -> list:
+    return [_raiz(w) for w in clave.split("_") if w and w not in _FILLER]
+
+
+# Más específicas primero (más raíces, luego más largas), igual que en el frontend
+_CLAVES_ORDENADAS = sorted(
+    [(c, _raices_de_clave(c)) for c in CLAVES_DICCIONARIO if _raices_de_clave(c)],
+    key=lambda x: (-len(x[1]), -len("".join(x[1]))),
+)
+
+
+def categoria_de_descripcion(descripcion) -> Optional[str]:
+    """'CEPILLO DENTAL PARA ADULTO: ...' -> 'Cepillo Dental'. None si no calza."""
+    if not descripcion:
+        return None
+    corta = str(descripcion).split(":")[0].strip()
+    palabras = _norm_texto_cat(corta).split()
+    if not palabras:
+        return None
+    for clave, raices in _CLAVES_ORDENADAS:
+        if all(any(p.startswith(r) for p in palabras) for r in raices):
+            return " ".join(w.capitalize() for w in clave.split("_"))
+    return None
+
 
 def _texto(v) -> Optional[str]:
     """Acepta string o dict ({nombre: ...}) y devuelve texto limpio."""
@@ -410,8 +473,12 @@ def _guardar_ops_venta(cur, venta: dict, ops: list, mapa: dict, ahora):
             codigo = str(p.get("codigo") or "").strip()
             pv = prods_venta.get(codigo, {})
             marca = _primero(p, CLAVES_MARCA) or _primero(pv, CLAVES_MARCA)
-            categoria = _primero(p, CLAVES_CATEGORIA) or _primero(pv, CLAVES_CATEGORIA)
             desc = (p.get("descripcion") or pv.get("descripcion") or "")[:500] or None
+            categoria = (
+                _primero(p, CLAVES_CATEGORIA)
+                or _primero(pv, CLAVES_CATEGORIA)
+                or categoria_de_descripcion(pv.get("descripcion") or p.get("descripcion"))
+            )
             cur.execute(
                 """
                 INSERT IGNORE INTO proveedor_historial

@@ -862,6 +862,8 @@ function TarjetaProveedor({
   const h: Historial = p.historial ?? { ops: 0, marcas: [], categorias: [], catalogos: [], zonas: [] };
   const ubicacion = [p.distrito, p.provincia, p.departamento].filter(Boolean).join(", ");
 
+  const calle = (p.direccion || "").trim();
+
   const agregar = async () => {
     if (!valor.trim()) return;
     setGuardando(true);
@@ -913,7 +915,7 @@ function TarjetaProveedor({
             {ubicacion && (
               <span className="flex items-center gap-1 text-[11px] text-slate-500 min-w-0">
                 <MapPin size={11} className="text-slate-300 shrink-0" />
-                <span className="truncate" title={p.direccion || ubicacion}>
+                <span className="truncate" title={ubicacion}>
                   {ubicacion}
                 </span>
               </span>
@@ -929,6 +931,14 @@ function TarjetaProveedor({
           {h.ops > 0 ? `${h.ops} OP${h.ops === 1 ? "" : "s"}` : "Sin OPs"}
         </span>
       </div>
+
+      {/* Dirección completa */}
+      {calle && (
+        <p className="mt-1.5 flex items-start gap-1 text-[11px] text-slate-500 leading-snug">
+          <Building2 size={11} className="text-slate-300 shrink-0 mt-0.5" />
+          <span>{calle}</span>
+        </p>
+      )}
 
       {/* Teléfonos */}
       {telefonos.length > 0 && (
