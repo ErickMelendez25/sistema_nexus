@@ -58,6 +58,7 @@ interface Proveedor {
   distrito: string | null;
   telefono_erp: string | null;
   email: string | null;
+  activo?: number;
   contactos: Contacto[];
   etiquetas: Etiqueta[];
   historial?: Historial;
@@ -903,8 +904,15 @@ function TarjetaProveedor({
       {/* Cabecera */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[13px] font-bold text-slate-800 truncate" title={p.razon_social}>
-            {p.razon_social}
+          <p className="flex items-center gap-1.5 text-[13px] font-bold text-slate-800 min-w-0" title={p.razon_social}>
+            <span
+              className={`shrink-0 w-2 h-2 rounded-full ${
+                    p.activo === 0 ? "bg-slate-300" : "bg-white border border-slate-300"
+              }`}
+              title={p.activo === 0 ? "Inactivo en el ERP" : "Activo"}
+              aria-label={p.activo === 0 ? "Inactivo" : "Activo"}
+            />
+            <span className="truncate">{p.razon_social}</span>
           </p>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
             {p.ruc && (

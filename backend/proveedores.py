@@ -756,7 +756,7 @@ def buscar_proveedores(
     zona_departamento: Optional[str] = None, # a dónde YA entregó
     zona_provincia: Optional[str] = None,
     zona_distrito: Optional[str] = None,
-    activo: Optional[bool] = True,
+    activo: Optional[bool] = None,
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
 ):
@@ -814,7 +814,7 @@ def buscar_proveedores(
             total = cur.fetchone()["total"]
 
             cur.execute(
-                f"SELECT p.* FROM proveedores p WHERE {where_sql} ORDER BY p.razon_social_norm LIMIT %s OFFSET %s",
+                f"SELECT p.* FROM proveedores p WHERE {where_sql} ORDER BY p.activo DESC, p.razon_social_norm LIMIT %s OFFSET %s",
                 tuple(params + [limit, (page - 1) * limit]),
             )
             items = cur.fetchall()
