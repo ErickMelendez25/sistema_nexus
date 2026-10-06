@@ -22,8 +22,10 @@ import {
   SlidersHorizontal,
   ShieldCheck,
   Lock,
+  Store,
 } from "lucide-react";
 import { ModalConsultarPrecios } from "./ModalConsultarPrecios";
+import { ModalConsultarProveedores } from "./ModalConsultarProveedores";
 
 const API_BASE = process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
 
@@ -702,6 +704,7 @@ export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion,
   const [filtroPrivadas, setFiltroPrivadas] = useState(false);
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [modalPreciosAbierto, setModalPreciosAbierto] = useState(false);
+  const [modalProveedoresAbierto, setModalProveedoresAbierto] = useState(false);
 
   const [pagina, setPagina] = useState(1);
 
@@ -872,7 +875,17 @@ const filtrosActivos = [
           >
             <DollarSign size={14} />
             Consultar precios
-          </button>
+        </button>
+
+        <button
+            onClick={() => setModalProveedoresAbierto(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-sm font-medium text-indigo-700 hover:border-indigo-300 hover:bg-indigo-100 transition-colors"
+          >
+            <Store size={14} />
+            Consultar proveedor
+        </button>
+
+
         <button
             onClick={() => setMostrarFiltros((x) => !x)}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
@@ -914,6 +927,11 @@ const filtrosActivos = [
       <ModalConsultarPrecios
         abierto={modalPreciosAbierto}
         onCerrar={() => setModalPreciosAbierto(false)}
+      />
+
+      <ModalConsultarProveedores
+        abierto={modalProveedoresAbierto}
+        onCerrar={() => setModalProveedoresAbierto(false)}
       />
 
       {sinSesion && (

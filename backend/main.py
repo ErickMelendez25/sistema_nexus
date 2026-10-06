@@ -95,6 +95,7 @@ from routers import email_router
 from routers import cumpleanos as cumpleanos_mod
 
 from chat import router as chat_router
+from proveedores import router as proveedores_router, crear_tablas as crear_tablas_proveedores
 
 logger = logging.getLogger("helbot.main")
 logging.basicConfig(level=logging.INFO)
@@ -184,6 +185,7 @@ app.include_router(email_router.router, prefix="/api/email", tags=["Correo"])
 app.include_router(cumpleanos_mod.router)
 
 app.include_router(chat_router)
+app.include_router(proveedores_router)
 
 
 
@@ -429,6 +431,12 @@ async def on_startup():
         logger.info("DB inicializada (tablas verificadas/creadas)")
     except Exception as e:
         logger.error(f"No se pudo inicializar la DB: {e}")
+
+    try:
+        crear_tablas_proveedores()
+        logger.info("Tablas de proveedores verificadas/creadas")
+    except Exception as e:
+        logger.error(f"No se pudieron crear las tablas de proveedores: {e}")
 
     # Al arrancar, ningún WebSocket de chat está vivo todavía — si el
     # backend se cayó de golpe la vez anterior, la columna `online` pudo

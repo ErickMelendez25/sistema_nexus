@@ -587,6 +587,18 @@ def rellenar_producto_de_orden(
     producto_descripcion: str | None = None,
 ) -> dict:
 
+    # Guarda el teléfono que escribió el usuario como contacto 'nexus' del proveedor
+    try:
+        if datos.get("proveedor_id") and datos.get("proveedor_telefono"):
+            from proveedores import registrar_contacto_nexus
+            registrar_contacto_nexus(
+                int(datos["proveedor_id"]),
+                datos["proveedor_telefono"],
+                registrado_por=rellenado_por,
+            )
+    except Exception as e:
+        logger.warning(f"rellenar_producto_de_orden: no se pudo registrar el contacto nexus: {e}")
+
     conn = get_conn()
     try:
         with conn.cursor() as cur:
