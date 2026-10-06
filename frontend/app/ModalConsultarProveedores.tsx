@@ -222,15 +222,30 @@ export function ModalConsultarProveedores({
   }, [abierto, cargarResumen]);
 
   /* ---- actualización automática mientras corre el sync del historial ---- */
-  useEffect(() => {
+    useEffect(() => {
     if (!abierto || sondeo <= 0) return;
-    const t = setTimeout(() => {
-      cargarResumen();
-      setRecarga((x) => x + 1);
-      setSondeo((s) => s - 1);
+    const t = setTimeout(async () => {
+        cargarResumen();
+        setRecarga((x) => x + 1);
+        try {
+        const r = await fetch(`${BASE}/historial/estado`);
+        const e = await r.json();
+        if (e.error) {
+            setMensaje(`Error en la sincronización: ${e.error}`);
+            setSondeo(0);
+            return;
+        }
+        setMensaje(`Leyendo OPs: ${e.hechas}/${e.total} ventas · ${e.filas} filas guardadas`);
+        if (!e.corriendo) {
+            setMensaje(`Historial listo: ${e.ops} OPs, ${e.filas} filas.`);
+            setSondeo(0);
+            return;
+        }
+        } catch {}
+        setSondeo((s) => s - 1);
     }, 5000);
     return () => clearTimeout(t);
-  }, [abierto, sondeo, cargarResumen]);
+    }, [abierto, sondeo, cargarResumen]);
 
   /* ---- búsqueda ---- */
   useEffect(() => {
@@ -300,7 +315,7 @@ export function ModalConsultarProveedores({
         setMensaje(
           "Leyendo las OPs del ERP en segundo plano. Los números se actualizan solos durante unos 2 minutos."
         );
-        setSondeo(24);
+        setSondeo(240);
       }
     } catch {
       setMensaje("No se pudo conectar con el backend.");

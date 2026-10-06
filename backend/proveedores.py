@@ -351,11 +351,20 @@ def _primero(d, claves) -> Optional[str]:
 
 
 def _ops_de_venta(venta: dict):
-    """Devuelve (venta_id, lista_de_ops | None). Usa ordenesProveedor si ya
-    viene dentro de la venta; si no, pide GET /ordenes-proveedores/{id}/op."""
+    """Devuelve (venta_id, lista_de_ops | None). La OP embebida en la venta es
+    un resumen SIN proveedorId, así que solo se usa si trae el proveedor;
+    si no, se pide la OP completa al ERP."""
     vid = venta.get("id")
+
+    # Ventas sin OPs: no gastar un request
+    if venta.get("nOps") == 0:
+        return vid, []
+
     ops = venta.get("ordenesProveedor") or venta.get("ordenesProveedores")
-    if isinstance(ops, list) and all(isinstance(o, dict) and "productos" in o for o in ops):
+    if (
+        isinstance(ops, list) and ops
+        and all(isinstance(o, dict) and "productos" in o and ("proveedorId" in o or "proveedor" in o) for o in ops)
+    ):
         return vid, ops
     try:
         r = erp_session.session.get(f"{ERP_API_BASE}/ordenes-proveedores/{vid}/op", timeout=20)
@@ -367,85 +376,133 @@ def _ops_de_venta(venta: dict):
         return vid, None
 
 
-def sincronizar_historial_erp(workers: int = 4) -> dict:
-    """Recorre las ventas del ERP y, por cada OP, guarda una fila por producto:
-    proveedor + marca + categoría + catálogo + zona de entrega."""
-    if not erp_session.autenticado:
-        raise RuntimeError("Sesión ERP no activa")
+import threading
 
-    ventas = [v for v in erp_session.obtener_todas_ventas(forzar=True)["ventas"] if v.get("id")]
-    ventas_por_id = {v["id"]: v for v in ventas}
+_lock_hist = threading.Lock()
+_estado_hist = {
+    "corriendo": False, "fase": "", "total": 0, "hechas": 0,
+    "ops": 0, "filas": 0, "sin_proveedor": 0, "fallidas": 0,
+    "error": None, "inicio": None, "fin": None,
+}
 
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, erp_id FROM proveedores WHERE erp_id IS NOT NULL")
-            mapa = {f["erp_id"]: f["id"] for f in cur.fetchall()}
-    finally:
-        conn.close()
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        resultados = list(pool.map(_ops_de_venta, ventas))
-
-    ahora = datetime.now()
+def _guardar_ops_venta(cur, venta: dict, ops: list, mapa: dict, ahora):
+    """Inserta las filas de historial de UNA venta. Devuelve (filas, ops_leidas, sin_proveedor)."""
     filas = ops_leidas = sin_proveedor = 0
-    conn = get_conn()
+    vid = venta["id"]
+    prods_venta = {str(p.get("codigo") or "").strip(): p for p in (venta.get("productos") or [])}
+    catalogo = _primero(venta, CLAVES_CATALOGO)
+    dep = _limpio(venta.get("departamentoEntrega"))
+    prov = _limpio(venta.get("provinciaEntrega"))
+    dist = _limpio(venta.get("distritoEntrega"))
+
+    for op in ops:
+        op_id = op.get("id")
+        prov_erp = op.get("proveedorId") or (op.get("proveedor") or {}).get("id")
+        pid = mapa.get(prov_erp)
+        if not op_id or not pid:
+            sin_proveedor += 1
+            continue
+        ops_leidas += 1
+
+        cur.execute("DELETE FROM proveedor_historial WHERE op_id = %s", (op_id,))
+        for p in (op.get("productos") or [{}]):
+            codigo = str(p.get("codigo") or "").strip()
+            pv = prods_venta.get(codigo, {})
+            marca = _primero(p, CLAVES_MARCA) or _primero(pv, CLAVES_MARCA)
+            categoria = _primero(p, CLAVES_CATEGORIA) or _primero(pv, CLAVES_CATEGORIA)
+            desc = (p.get("descripcion") or pv.get("descripcion") or "")[:500] or None
+            cur.execute(
+                """
+                INSERT IGNORE INTO proveedor_historial
+                    (proveedor_id, op_id, orden_compra_id, numero_ocam, producto_codigo,
+                     producto_descripcion, marca, marca_norm, categoria, categoria_norm,
+                     catalogo, catalogo_norm,
+                     entrega_departamento, entrega_provincia, entrega_distrito,
+                     entrega_departamento_norm, entrega_provincia_norm, entrega_distrito_norm,
+                     sincronizado_en)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    pid, op_id, vid, _limpio(venta.get("numeroOcam")), codigo[:80], desc,
+                    marca, norm(marca), (categoria[:255] if categoria else None), norm(categoria),
+                    catalogo, norm(catalogo),
+                    dep, prov, dist, norm(dep), norm(prov), norm(dist),
+                    ahora,
+                ),
+            )
+            filas += 1
+    return filas, ops_leidas, sin_proveedor
+
+
+def sincronizar_historial_erp(workers: int = 3, lote: int = 40) -> dict:
+    """Procesa las ventas por LOTES y hace commit en cada lote, así el
+    historial se va llenando en vivo y no se pierde si el proceso muere."""
+    with _lock_hist:
+        if _estado_hist["corriendo"]:
+            return {"detalle": "ya hay una sincronización corriendo"}
+        _estado_hist.update(
+            corriendo=True, fase="leyendo ventas del ERP", total=0, hechas=0, ops=0,
+            filas=0, sin_proveedor=0, fallidas=0, error=None,
+            inicio=datetime.now().isoformat(), fin=None,
+        )
     try:
-        with conn.cursor() as cur:
-            for vid, ops in resultados:
-                if not ops:
-                    continue
-                venta = ventas_por_id[vid]
-                prods_venta = {str(p.get("codigo") or "").strip(): p for p in (venta.get("productos") or [])}
-                catalogo = _primero(venta, CLAVES_CATALOGO)
-                dep = _limpio(venta.get("departamentoEntrega"))
-                prov = _limpio(venta.get("provinciaEntrega"))
-                dist = _limpio(venta.get("distritoEntrega"))
+        if not erp_session.autenticado:
+            raise RuntimeError("Sesión ERP no activa")
 
-                for op in ops:
-                    op_id = op.get("id")
-                    prov_erp = op.get("proveedorId") or (op.get("proveedor") or {}).get("id")
-                    pid = mapa.get(prov_erp)
-                    if not op_id or not pid:
-                        sin_proveedor += 1
-                        continue
-                    ops_leidas += 1
+        ventas = [v for v in erp_session.obtener_todas_ventas(forzar=True)["ventas"] if v.get("id")]
+        ventas_por_id = {v["id"]: v for v in ventas}
+        _estado_hist.update(total=len(ventas), fase="leyendo OPs")
+        logger.info(f"historial: {len(ventas)} ventas por procesar")
 
-                    cur.execute("DELETE FROM proveedor_historial WHERE op_id = %s", (op_id,))
-                    productos = op.get("productos") or [{}]
-                    for p in productos:
-                        codigo = str(p.get("codigo") or "").strip()
-                        pv = prods_venta.get(codigo, {})
-                        marca = _primero(p, CLAVES_MARCA) or _primero(pv, CLAVES_MARCA)
-                        categoria = _primero(p, CLAVES_CATEGORIA) or _primero(pv, CLAVES_CATEGORIA)
-                        desc = (p.get("descripcion") or pv.get("descripcion") or "")[:500] or None
-                        cur.execute(
-                            """
-                            INSERT IGNORE INTO proveedor_historial
-                                (proveedor_id, op_id, orden_compra_id, numero_ocam, producto_codigo,
-                                 producto_descripcion, marca, marca_norm, categoria, categoria_norm,
-                                 catalogo, catalogo_norm,
-                                 entrega_departamento, entrega_provincia, entrega_distrito,
-                                 entrega_departamento_norm, entrega_provincia_norm, entrega_distrito_norm,
-                                 sincronizado_en)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                            """,
-                            (
-                                pid, op_id, vid, _limpio(venta.get("numeroOcam")), codigo[:80], desc,
-                                marca, norm(marca), (categoria or None) and categoria[:255], norm(categoria),
-                                catalogo, norm(catalogo),
-                                dep, prov, dist, norm(dep), norm(prov), norm(dist),
-                                ahora,
-                            ),
-                        )
-                        filas += 1
-        conn.commit()
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, erp_id FROM proveedores WHERE erp_id IS NOT NULL")
+                mapa = {f["erp_id"]: f["id"] for f in cur.fetchall()}
+        finally:
+            conn.close()
+
+        for i in range(0, len(ventas), lote):
+            trozo = ventas[i:i + lote]
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                resultados = list(pool.map(_ops_de_venta, trozo))
+
+            ahora = datetime.now()
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    for vid, ops in resultados:
+                        if ops is None:
+                            _estado_hist["fallidas"] += 1
+                            continue
+                        if not ops:
+                            continue
+                        f, o, s = _guardar_ops_venta(cur, ventas_por_id[vid], ops, mapa, ahora)
+                        _estado_hist["filas"] += f
+                        _estado_hist["ops"] += o
+                        _estado_hist["sin_proveedor"] += s
+                conn.commit()          # <- commit por lote
+            finally:
+                conn.close()
+
+            _estado_hist["hechas"] = min(i + lote, len(ventas))
+            logger.info(f"historial: {_estado_hist['hechas']}/{len(ventas)} ventas, {_estado_hist['filas']} filas")
+
+        _estado_hist["fase"] = "terminado"
+    except Exception as e:
+        logger.exception("historial: falló la sincronización")
+        _estado_hist["error"] = str(e)
+        _estado_hist["fase"] = "error"
     finally:
-        conn.close()
+        _estado_hist["corriendo"] = False
+        _estado_hist["fin"] = datetime.now().isoformat()
+    return dict(_estado_hist)
 
-    logger.info(f"historial: {ops_leidas} OPs, {filas} filas, {sin_proveedor} OPs sin proveedor en Nexus")
-    return {"ventas": len(ventas), "ops": ops_leidas, "filas": filas, "ops_sin_proveedor_en_nexus": sin_proveedor}
 
+@router.get("/historial/estado")
+def estado_historial():
+    return _estado_hist
 
 
 def registrar_contacto_nexus(erp_proveedor_id: int, telefono: Optional[str], nombre: Optional[str] = None,
@@ -502,9 +559,10 @@ def sync_erp(background: BackgroundTasks, con_contactos: bool = True):
 
 @router.post("/historial/sync")
 def sync_historial(background: BackgroundTasks):
-    """Llena proveedor_historial desde las OPs. Corre en segundo plano."""
     if not erp_session.autenticado:
         raise HTTPException(status_code=409, detail="Sesión ERP no activa")
+    if _estado_hist["corriendo"]:
+        return {"estado": "ya está corriendo", **_estado_hist}
     background.add_task(sincronizar_historial_erp)
     return {"estado": "iniciado en segundo plano"}
 
