@@ -40,6 +40,23 @@ interface Etiqueta {
   tipo: "marca" | "categoria" | "catalogo";
   valor: string;
 }
+
+interface OpHist {
+  op_id: number;
+  orden_compra_id: number;
+  numero_ocam: string | null;
+  catalogo: string | null;
+  entrega_departamento: string | null;
+  productos: number;
+  marcas: string[];
+}
+
+// ⚠️ AJUSTAR: URL con la que se abre una orden en Nexus.
+// Provisional: abre Nexus buscando por el OCAM.
+// Abre Nexus en la orden (id de la venta del ERP) y marca la OP a resaltar.
+const urlOrden = (o: OpHist) =>
+  `${window.location.origin}${window.location.pathname}?oc=${o.orden_compra_id}&op=${o.op_id}`;
+
 interface Historial {
   ops: number;
   marcas: string[];
@@ -223,30 +240,32 @@ export function ModalConsultarProveedores({
   }, [abierto, cargarResumen]);
 
   /* ---- actualización automática mientras corre el sync del historial ---- */
-    useEffect(() => {
+  /* ---- actualización automática mientras corre el sync del historial ---- */
+  useEffect(() => {
     if (!abierto || sondeo <= 0) return;
     const t = setTimeout(async () => {
-        cargarResumen();
-        setRecarga((x) => x + 1);
-        try {
+      cargarResumen(); // solo el resumen, no se recargan filtros ni lista en cada tick
+      try {
         const r = await fetch(`${BASE}/historial/estado`);
         const e = await r.json();
         if (e.error) {
-            setMensaje(`Error en la sincronización: ${e.error}`);
-            setSondeo(0);
-            return;
+          setMensaje(`Error en la sincronización: ${e.error}`);
+          setSondeo(0);
+          return;
         }
-        setMensaje(`Leyendo OPs: ${e.hechas}/${e.total} ventas · ${e.filas} filas guardadas`);
-        if (!e.corriendo) {
-            setMensaje(`Historial listo: ${e.ops} OPs, ${e.filas} filas.`);
-            setSondeo(0);
-            return;
+        if (e.corriendo) {
+          setMensaje(`Leyendo OPs: ${e.hechas}/${e.total} ventas · ${e.filas} filas guardadas`);
+        } else {
+          setMensaje(`Historial listo: ${e.ops} OPs, ${e.filas} filas.`);
+          setRecarga((x) => x + 1); // recarga lista y filtros UNA sola vez, al terminar
+          setSondeo(0);
+          return;
         }
-        } catch {}
-        setSondeo((s) => s - 1);
-    }, 5000);
+      } catch {}
+      setSondeo((s) => s - 1);
+    }, 10000);
     return () => clearTimeout(t);
-    }, [abierto, sondeo, cargarResumen]);
+  }, [abierto, sondeo, cargarResumen]);
 
   /* ---- búsqueda ---- */
   useEffect(() => {
@@ -316,7 +335,7 @@ export function ModalConsultarProveedores({
         setMensaje(
           "Leyendo las OPs del ERP en segundo plano. Los números se actualizan solos durante unos 2 minutos."
         );
-        setSondeo(240);
+        setSondeo(120);
       }
     } catch {
       setMensaje("No se pudo conectar con el backend.");
@@ -351,6 +370,7 @@ export function ModalConsultarProveedores({
     setTexto(TEXTO_VACIO);
     setTextoDeb(TEXTO_VACIO);
     setSel(SEL_VACIO);
+    setVerUbicacionProv(false);
     setPagina(1);
   };
 
@@ -381,17 +401,17 @@ export function ModalConsultarProveedores({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-slate-900/50 backdrop-blur-[2px] p-3 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-[2px] p-3"
       onMouseDown={(e) => e.target === e.currentTarget && onCerrar()}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Consultar proveedores"
-        className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl border border-slate-200 my-4"
+        className="w-full max-w-[1200px] h-[92vh] flex flex-col bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden"
       >
         {/* ======================= Header ======================= */}
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-slate-100">
+        <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center">
               <Store size={16} className="text-indigo-600" />
@@ -432,7 +452,7 @@ export function ModalConsultarProveedores({
           </div>
         </div>
 
-        <div className="p-4 space-y-3">
+        <div className="p-4 flex flex-col gap-3 flex-1 min-h-0">
           {/* ===================== Avisos ===================== */}
           {mensaje && (
             <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -475,8 +495,17 @@ export function ModalConsultarProveedores({
               value={texto.q}
               onChange={(e) => setCampoTexto("q", e.target.value)}
               placeholder="Buscar por nombre, RUC, teléfono o contacto"
-              className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2.5 text-[12.5px] text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+              className="w-full rounded-lg border border-slate-200 pl-9 pr-9 py-2.5 text-[12.5px] text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
             />
+            {texto.q && (
+              <button
+                onClick={() => setCampoTexto("q", "")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Limpiar búsqueda"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
 
           {/* ===================== Filtros ===================== */}
@@ -622,8 +651,12 @@ export function ModalConsultarProveedores({
               </span>
             ))}
             {activos.length > 0 && (
-              <button onClick={limpiarTodo} className="text-[11px] text-indigo-600 hover:text-indigo-800 ml-1">
-                Limpiar todo
+              <button
+                onClick={limpiarTodo}
+                className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
+              >
+                <X size={11} />
+                Limpiar filtros ({activos.length})
               </button>
             )}
           </div>
@@ -645,9 +678,9 @@ export function ModalConsultarProveedores({
             </div>
           )}
 
-          <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-0.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 items-start content-start flex-1 min-h-[160px] overflow-y-auto pr-0.5">
             {cargando && items.length === 0 && (
-              <div className="flex items-center gap-2 text-[11px] text-slate-400 px-1">
+              <div className="col-span-full flex items-center gap-2 text-[11px] text-slate-400 px-1">
                 <Loader2 size={13} className="animate-spin" /> Cargando…
               </div>
             )}
@@ -668,7 +701,7 @@ export function ModalConsultarProveedores({
 
           {/* ===================== Paginación ===================== */}
           {total > 0 && (
-            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <div className="shrink-0 flex items-center justify-between pt-2 border-t border-slate-100">
               <button
                 onClick={() => setPagina((x) => Math.max(1, x - 1))}
                 disabled={pagina === 1}
@@ -746,13 +779,25 @@ function CampoTexto({
   return (
     <label className="block">
       <span className="block text-[10.5px] font-medium text-slate-500 mb-0.5">{etiqueta}</span>
-      <input
-        list={lista}
-        value={valor}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[12px] text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
-      />
+      <div className="relative">
+        <input
+          list={lista}
+          value={valor}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="w-full rounded-lg border border-slate-200 bg-white pl-2.5 pr-7 py-2 text-[12px] text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+        />
+        {valor && (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            aria-label={`Limpiar ${etiqueta}`}
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
     </label>
   );
 }
@@ -771,18 +816,32 @@ function CampoSelect({
   return (
     <label className="block">
       <span className="block text-[10.5px] font-medium text-slate-500 mb-0.5">{etiqueta}</span>
-      <select
-        value={valor}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[12px] text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
-      >
-        <option value="">Todos</option>
-        {(opciones || []).map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={valor}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full rounded-lg border border-slate-200 bg-white pl-2.5 py-2 text-[12px] text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 ${
+            valor ? "pr-12" : "pr-2.5"
+          }`}
+        >
+          <option value="">Todos</option>
+          {(opciones || []).map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        {valor && (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="absolute right-6 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 bg-white"
+            aria-label={`Limpiar ${etiqueta}`}
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
     </label>
   );
 }
@@ -860,6 +919,26 @@ function TarjetaProveedor({
   const [valor, setValor] = useState("");
   const [guardando, setGuardando] = useState(false);
 
+  const [verOps, setVerOps] = useState(false);
+  const [ops, setOps] = useState<OpHist[] | null>(null);
+  const [cargandoOps, setCargandoOps] = useState(false);
+
+  const alternarOps = async () => {
+    const abrir = !verOps;
+    setVerOps(abrir);
+    if (abrir && ops === null) {
+      setCargandoOps(true);
+      try {
+        const r = await fetch(`${BASE}/${p.id}/ops`);
+        setOps(r.ok ? await r.json() : []);
+      } catch {
+        setOps([]);
+      } finally {
+        setCargandoOps(false);
+      }
+    }
+  };
+
   const h: Historial = p.historial ?? { ops: 0, marcas: [], categorias: [], catalogos: [], zonas: [] };
   const ubicacion = [p.distrito, p.provincia, p.departamento].filter(Boolean).join(", ");
 
@@ -930,15 +1009,63 @@ function TarjetaProveedor({
             )}
           </div>
         </div>
-        <span
-          className={`shrink-0 text-[10.5px] font-semibold px-2 py-1 rounded-md ${
-            h.ops > 0 ? "bg-indigo-50 text-indigo-700" : "bg-slate-50 text-slate-400"
+        <button
+          type="button"
+          onClick={h.ops > 0 ? alternarOps : undefined}
+          disabled={h.ops === 0}
+          className={`shrink-0 flex items-center gap-1 text-[10.5px] font-semibold px-2 py-1 rounded-md ${
+            h.ops > 0
+              ? "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 cursor-pointer"
+              : "bg-slate-50 text-slate-400 cursor-default"
           }`}
-          title="Cantidad de OPs en las que participó"
+          title={h.ops > 0 ? "Ver las OPs y sus órdenes" : "Sin OPs"}
+          aria-expanded={verOps}
         >
           {h.ops > 0 ? `${h.ops} OP${h.ops === 1 ? "" : "s"}` : "Sin OPs"}
-        </span>
+          {h.ops > 0 && (
+            <ChevronDown size={11} className={`transition-transform ${verOps ? "rotate-180" : ""}`} />
+          )}
+        </button>
       </div>
+
+            {/* Lista de OPs y su orden de compra */}
+      {verOps && (
+        <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/40 p-2 space-y-1">
+          {cargandoOps && (
+            <p className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
+              <Loader2 size={11} className="animate-spin" /> Cargando OPs…
+            </p>
+          )}
+          {!cargandoOps && ops && ops.length === 0 && (
+            <p className="text-[10.5px] text-slate-400">No se pudo leer el detalle de las OPs.</p>
+          )}
+          {ops?.map((o) => (
+            <a
+              key={`${o.op_id}-${o.orden_compra_id}`}
+              href={urlOrden(o)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-md bg-white border border-slate-200 px-2 py-1.5 hover:border-indigo-300"
+              title="Abrir la orden en una pestaña nueva"
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span
+                  className="text-[11px] font-semibold text-indigo-700 truncate"
+                  style={{ fontFamily: "var(--font-mono)" }}
+                >
+                  {o.numero_ocam || `Orden #${o.orden_compra_id}`}
+                </span>
+                <span className="text-[10px] text-slate-400 shrink-0">OP #{o.op_id} ↗</span>
+              </span>
+              <span className="block text-[10.5px] text-slate-500 truncate">
+                {o.productos} producto{o.productos === 1 ? "" : "s"}
+                {o.marcas.length > 0 && ` · ${o.marcas.join(", ")}`}
+                {o.entrega_departamento && ` · ${o.entrega_departamento}`}
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
 
       {/* Dirección completa */}
       {calle && (

@@ -1575,6 +1575,7 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
             soloLecturaGlobal={soloLecturaGlobal}
             productoInicial={(venta as any)._productoAbrir}
             grupoInicial={(venta as any)._grupoAbrir}
+            opResaltar={(venta as any)._opAbrir}
             onFinalizado={onFinalizadoFormulario}
             tick={tick}
             proveedores={proveedores}
@@ -3845,6 +3846,7 @@ function FormularioCrearProveedor({
   soloLecturaGlobal,
   productoInicial,
   grupoInicial,
+  opResaltar,
   onFinalizado,
   tick,
   proveedores,
@@ -3863,6 +3865,7 @@ function FormularioCrearProveedor({
   soloLecturaGlobal?: boolean;
   productoInicial?: string;
   grupoInicial?: string;
+  opResaltar?: number;
   onFinalizado: () => void;
   tick?: number;
   proveedores: ProveedorOption[];
@@ -3913,6 +3916,36 @@ function FormularioCrearProveedor({
   const [imagenesPorProducto, setImagenesPorProducto] = useState<Record<string, ImagenProducto[]>>({});
 
   const [detalleErpPorOp, setDetalleErpPorOp] = useState<Record<number, any>>({});
+
+
+    // ---- Resaltar una OP al abrir el drawer desde un enlace (?oc=..&op=..) ----
+  const [opResaltadaActiva, setOpResaltadaActiva] = useState<number | null>(null);
+  const opResaltadaYaAplicada = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!opResaltar) return;
+    const clave = `${venta?.id}:${opResaltar}`;
+    if (opResaltadaYaAplicada.current === clave) return; // solo una vez por apertura
+
+    // Espera a que las OPs reales ya hayan cargado
+    const existe = (ops || []).some((op: any) => Number(op.id) === Number(opResaltar));
+    if (!existe) return;
+
+    opResaltadaYaAplicada.current = clave;
+    setOpResaltadaActiva(Number(opResaltar));
+
+    // Pequeña espera para que el encabezado ya esté pintado antes del scroll
+    setTimeout(() => {
+      document
+        .getElementById(`op-grupo-${opResaltar}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 400);
+
+    // Deja de parpadear a los 4 segundos
+    setTimeout(() => setOpResaltadaActiva(null), 4000);
+  }, [opResaltar, ops, venta?.id]);
+
+
 
   useEffect(() => {
     if (!productoAbierto) return;
@@ -5128,7 +5161,14 @@ const codigo = String(p.codigo ?? p.id ?? "").trim();
         <Fragment key={codigo}>
           {esNuevoGrupo && (
             opReal ? (
-              <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-0.5 mb-1.5 mt-3 first:mt-0">
+              <div
+                id={`op-grupo-${opReal.id}`}
+                className={`flex items-center justify-between flex-wrap gap-x-2 gap-y-0.5 mb-1.5 mt-3 first:mt-0 ${
+                  opResaltadaActiva === Number(opReal.id)
+                    ? "hb-pulse-glow border rounded-lg px-2.5 py-1.5"
+                    : ""
+                }`}
+              >
                 <p className="text-[11px] font-bold text-violet-700 uppercase tracking-wide flex items-center gap-1.5">
                   <ShieldCheck size={11} />
                   OP {opReal.codigoOp || `#${opReal.id}`}

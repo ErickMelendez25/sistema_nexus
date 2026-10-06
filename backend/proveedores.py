@@ -835,7 +835,7 @@ def buscar_proveedores(
                            GROUP_CONCAT(DISTINCT marca SEPARATOR '|') AS marcas,
                            GROUP_CONCAT(DISTINCT categoria SEPARATOR '|') AS categorias,
                            GROUP_CONCAT(DISTINCT catalogo SEPARATOR '|') AS catalogos,
-                           GROUP_CONCAT(DISTINCT entrega_departamento SEPARATOR '|') AS zonas
+                           GROUP_CONCAT(DISTINCT entrega_departamento_norm SEPARATOR '|') AS zonas
                     FROM proveedor_historial WHERE proveedor_id IN ({fmt}) GROUP BY proveedor_id
                     """,
                     tuple(ids),
@@ -871,6 +871,34 @@ def detalle_proveedor(proveedor_id: int):
             cur.execute("SELECT * FROM proveedor_etiquetas WHERE proveedor_id=%s ORDER BY tipo, valor", (proveedor_id,))
             p["etiquetas"] = cur.fetchall()
             return p
+    finally:
+        conn.close()
+
+
+@router.get("/{proveedor_id}/ops")
+def ops_de_proveedor(proveedor_id: int):
+    """OPs donde participó el proveedor, con la orden de compra a la que pertenecen."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT op_id, orden_compra_id, numero_ocam,
+                       MAX(catalogo) AS catalogo,
+                       MAX(entrega_departamento) AS entrega_departamento,
+                       COUNT(*) AS productos,
+                       GROUP_CONCAT(DISTINCT marca SEPARATOR '|') AS marcas
+                FROM proveedor_historial
+                WHERE proveedor_id = %s
+                GROUP BY op_id, orden_compra_id, numero_ocam
+                ORDER BY orden_compra_id DESC, op_id DESC
+                """,
+                (proveedor_id,),
+            )
+            filas = cur.fetchall()
+            for f in filas:
+                f["marcas"] = [x for x in (f["marcas"] or "").split("|") if x]
+            return filas
     finally:
         conn.close()
 

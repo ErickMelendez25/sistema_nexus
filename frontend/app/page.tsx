@@ -1525,6 +1525,49 @@ interface ResumenChat {
       [ventasErp]
     );
 
+
+
+        // ---- Abrir una orden desde un enlace externo (?oc=ID&op=ID) ----
+    // Lo usa el modal "Consultar proveedor": al hacer clic en una OP abre
+    // Nexus en otra pestaña y esta orden se abre sola en el OpsDrawer.
+    const ordenPendienteUrlRef = useRef<{ oc: number; op: number | null } | null>(null);
+
+    useEffect(() => {
+      const sp = new URLSearchParams(window.location.search);
+      const oc = Number(sp.get("oc"));
+      if (oc) {
+        ordenPendienteUrlRef.current = { oc, op: Number(sp.get("op")) || null };
+      }
+    }, []);
+
+    useEffect(() => {
+      const pendiente = ordenPendienteUrlRef.current;
+      if (!pendiente || !usuario || ventasErp.length === 0) return;
+
+      ordenPendienteUrlRef.current = null; // se procesa una sola vez
+      window.history.replaceState(null, "", window.location.pathname); // limpia la URL
+
+      const venta = ventasErp.find((v) => Number(v.id) === pendiente.oc);
+      if (!venta) {
+        agregarAlertaFlotante({
+          id: Date.now() + Math.random(),
+          tipo: "info_sin_datos",
+          leida: true,
+          creado_en: new Date().toISOString(),
+          titulo: "No se encontró la orden",
+          mensaje: `La orden #${pendiente.oc} no está en el ERP cargado actualmente.`,
+        } as Alerta);
+        return;
+      }
+
+      setTab("ventas_erp");
+      setVentaOpsAbierta({
+        ...venta,
+        _modoCrear: true,
+        _opAbrir: pendiente.op ?? undefined,
+      } as any);
+    }, [ventasErp, usuario, agregarAlertaFlotante]);
+
     // Mismo patrón que abrirDesdeNotificacion, pero sin filtrar por id:
     // marca TODAS las no leídas de una vez, en el mismo endpoint.
     const marcarTodasLeidas = useCallback(() => {
