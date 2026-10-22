@@ -1,394 +1,565 @@
 """
-Helbot - perucompras_plazo.py
--------------------------------
-Modificación masiva de plazo de entrega (PlazoEntrega=1) — versión web
-de mejora_plazo_automatico.py. Sin Selenium: el catalogo_id por acuerdo
-se saca parseando el HTML de IndexMejora con la sesión de requests ya
-autenticada (el <select> ya viene resuelto en el HTML del servidor).
-
-NUEVO: obtener_departamentos()/obtener_provincias() quedan expuestas
-para que el router las use y arme un selector de Departamento/Provincia
-en el frontend — antes solo se usaban internamente (_get_departamentos/
-_get_provincias) y el frontend no tenía forma de pedirlas. También
-ejecutar_modificacion_plazo() ahora acepta departamento_codigo /
-provincia_codigo opcionales en `seleccion` para restringir el alcance,
-igual que el flujo Categoría → Departamento → Provincia de tu bot viejo
-en tkinter (mejora_plazo_automatico.py).
+Helbot - perucompras_plazo.py (versión Playwright)
+Acuerdo -> Catálogo -> Categoría -> Región -> Provincia -> Iniciar Búsqueda
+-> plazo=1 en la primera fila + "Aplicar a todos" (verificando todas las
+páginas) -> Enviar -> confirmar "Si".
 """
-import time
+import os
+import re
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from bs4 import BeautifulSoup
+
+from perucompras_pw import (
+    BASE_URL, PWTimeout, abrir_pagina, ir_a, esperar_ajax, select2_listar, select2_seleccionar,
+    opciones_select, drenar_modales, sesion_caida, captura,
+)
 
 logger = logging.getLogger("helbot.perucompras_plazo")
 
-BASE_URL = "https://www.catalogos.perucompras.gob.pe"
-INDEX_URL = f"{BASE_URL}/MejoraPlazo/IndexMejora"
-NUEVO_PLAZO = "1"
-GRUPO_PADRE = "324"
-MAX_WORKERS = 3
+URL_PLAZO = "/MejoraPlazo/IndexMejora"
+ACUERDOS_MARCO: dict = {}  # compatibilidad: ya no se usa
+RE_ERROR = re.compile(r"error|no se pudo|no es v[aá]lid|inv[aá]lid|incorrect|fall", re.I)
 
-# Idéntico a ACUERDOS_MARCO en mejora_plazo_automatico.py.
-ACUERDOS_MARCO = {
-    "EXT-CE-2024-3 MATERIALES E INSUMOS DE LIMPIEZA, PAPELES PARA ASEO Y LIMPIEZA": {
-        "grupo_id": 96768,
-        "categorias": [
-            (326, 12180, "ESCOBILLONES"), (326, 12181, "LAVAVAJILLAS"),
-            (326, 12182, "SUAVIZANTES_DE_ROPA"), (326, 12184, "DETERGENTES"),
-            (326, 12185, "REMOVEDORES_DE_SARRO"), (326, 12186, "DESINFECTANTES"),
-            (326, 12187, "DESENGRASANTES"), (326, 12188, "ESPONJAS_Y_FIBRAS"),
-            (326, 12189, "SILICONA"), (326, 12190, "TINAS_Y_BATEAS"),
-            (326, 12191, "TACHOS_BUZONES_Y_RECOLECTORES"), (326, 12192, "CERAS"),
-            (326, 12193, "TOALLAS"), (326, 12194, "ATRAPA_POLVO"),
-            (326, 12195, "MOPAS_Y_TRAPEADORES"), (326, 12196, "ALCOHOL_ETILICO_GEL"),
-            (326, 12165, "CEPILLO_DENTAL"), (326, 12166, "LIMPIADORES"),
-            (326, 12167, "RECOGEDORES"), (326, 12168, "AMBIENTADORES_Y_PASTILLAS"),
-            (326, 12169, "JABON_HIGIENE_MANOS"), (326, 12170, "PANOS_Y_BAYETAS"),
-            (326, 12171, "PASTA_DENTAL"), (326, 12172, "PULVERIZADORES_Y_ATOMIZADORES"),
-            (326, 12173, "CARRITOS_PARA_LIMPIEZA"), (326, 12174, "JALADORES_DE_AGUA"),
-            (326, 12175, "HIPOCLORITO_DE_SODIO"), (326, 12177, "BASTONES_Y_MANGOS"),
-            (326, 12178, "CEPILLOS_Y_ESCOBILLAS"), (326, 12179, "ESCOBAS"),
-        ],
-    },
-    "EXT-CE-2024-12 TUBERIAS, PINTURAS, CERÁMICOS, SANITARIOS, ACCESORIOS, Y COMPLEMENTOS EN GENERAL": {
-        "grupo_id": 96768,
-        "categorias": [
-            (355, 12345, "TUBOS_INST_ELECTRICAS"), (355, 12312, "REDUCCION"),
-            (355, 12313, "TEE"), (355, 12314, "TUBOS_INST_SANITARIAS"),
-            (355, 12316, "CODO"), (355, 12317, "PEGAMENTO_TUBERIAS"),
-            (355, 12318, "TAPON"), (355, 12319, "YEE"), (355, 12320, "UNION"),
-            (353, 12324, "PINTURA_VIAL"), (353, 12325, "PINTURA_ARQUITECTONICA"),
-            (353, 12326, "BASE"),
-        ],
-    },
-    "EXT-CE-2024-16 ACCESORIOS DOMÉSTICOS Y BIENES PARA USOS DIVERSOS": {
-        "grupo_id": 96768,
-        "categorias": [
-            (359, 12394, "BIDON"), (359, 12396, "BALDE"), (359, 12399, "VASO"),
-            (359, 12400, "PLATO"), (358, 12498, "PLANCHA_PANEL_DRYWALL"),
-            (358, 12383, "COLCHON"), (358, 12392, "CALAMINA_COBERTURA"),
-            (358, 12398, "TABLEROS_MADERA"), (358, 12387, "CAMA_METAL_2_NIVELES"),
-        ],
-    },
-    "EXT-CE-2024-17  BEBIDAS NO ALCOHÓLICAS": {
-        "grupo_id": 96768,
-        "categorias": [(371, 12423, "AGUA_MESA_DESCARTABLE")],
-    },
-    "EXT-CE-2024-18 CEREALES, ACEITE, AZUCARES Y MENESTRAS": {
-        "grupo_id": 96768,
-        "categorias": [
-            (379, 12436, "ARROZ_PILADO"), (382, 12435, "ACEITE_VEGETAL"),
-            (380, 12433, "AZUCAR"), (381, 12434, "LENTEJA"), (381, 12437, "FRIJOL"),
-        ],
-    },
-    "EXT-CE-2024-26 MAQUINAS, EQUIPOS Y HERRAMIENTAS PARA JARDINERIA, SILVICULTURA Y AGRICULTURA": {
-        "grupo_id": 96768,
-        "categorias": [
-            (377, 12457, "RASTRILLO_DE_METAL"), (377, 12458, "AZADON"),
-            (377, 12459, "NAVAJA_DE_INJERTAR"), (377, 12460, "LIMA_DE_AFILAR"),
-            (377, 12461, "MACHETE_CON_MANGO"), (377, 12462, "SERRUCHO_DE_PODA"),
-            (377, 12454, "TIJERA_DE_PODAR"), (377, 12455, "HACHA"), (377, 12456, "HOZ"),
-        ],
-    },
-}
+_CACHE_ARBOL: dict[str, list] = {}   # usuario real -> árbol acuerdo/catálogo/categoría
+_CACHE_GEO: dict[tuple, list] = {}
+
+_JS_FILAS = r"""() => [...document.querySelectorAll('#tbData tr.FilaDatos')].map(tr => {
+  const td = tr.querySelectorAll('td'); const i = tr.querySelector('input.PlazoEntrega');
+  return {vig: td[6] ? td[6].innerText.trim() : '', val: i ? i.value : ''};
+})"""
 
 
-import re
-
-def _codigo_desde_nombre_acuerdo(nombre_completo: str) -> str | None:
-    """Las claves de ACUERDOS_MARCO empiezan con su código real, ej.
-    'EXT-CE-2024-3 MATERIALES...' -> código 'EXT-CE-2024-3'. Matchear
-    por código es mucho más confiable que por texto completo (evita
-    tildes, mayúsculas, espacios dobles, sufijos '* No Vigente', etc.)."""
-    m = re.match(r"^([A-Z]+-[A-Z]+-\d{4}-\d+)", nombre_completo)
-    return m.group(1) if m else None
-
-
-def _obtener_acuerdos_dinamico(session) -> list[dict]:
-    """tipo=1 -> lista de acuerdos reales de Perú Compras, vía HTTP puro
-    (SIN Selenium, sin depender de que el <select> se renderice con JS).
-    Confirmado ya funcional por _diagnostico_catalogos en tu bot viejo."""
-    r = session.post(f"{BASE_URL}/MejoraPlazo/obtenerFiltros", data="1^", timeout=30)
-    r.raise_for_status()
-    raw = r.text or ""
-    logger.info(f"[obtenerFiltros tipo=1] RAW (primeros 500): {raw[:500]!r}")
-    acuerdos = []
-    for item in raw.strip().split("¬"):
-        campos = [x.strip() for x in item.strip().split("^") if x.strip() != ""]
-        if campos:
-            acuerdos.append({"id": campos[0], "campos": campos})
-    return acuerdos
+# ---------------- navegación ----------------
+def _preparar(page, acuerdo_id, catalogo=None, categoria=None):
+    ir_a(page, URL_PLAZO)
+    page.wait_for_selector("#cboAcuerdo", state="attached")
+    select2_seleccionar(page, "cboAcuerdo", acuerdo_id)
+    esperar_ajax(page)
+    if catalogo:
+        page.select_option("#cboCatalogo", str(catalogo))
+        esperar_ajax(page)
+    if categoria:
+        page.select_option("#cboCategoria", str(categoria))
+        esperar_ajax(page)
 
 
-def _obtener_catalogos_dinamico(session, acuerdo_id: str) -> list[dict]:
-    """tipo=2^{acuerdo_id} -> catálogos reales de ese acuerdo."""
-    r = session.post(f"{BASE_URL}/MejoraPlazo/obtenerFiltros", data=f"2^{acuerdo_id}", timeout=30)
-    r.raise_for_status()
-    raw = r.text or ""
-    logger.info(f"[obtenerFiltros tipo=2 acuerdo={acuerdo_id}] RAW (primeros 500): {raw[:500]!r}")
-    catalogos = []
-    for item in raw.strip().split("¬"):
-        campos = [x.strip() for x in item.strip().split("^") if x.strip() != ""]
-        if campos:
-            catalogos.append({"id": campos[0], "campos": campos})
-    return catalogos
+def _escanear_arbol(page) -> list[dict]:
+    ir_a(page, URL_PLAZO)
+    page.wait_for_selector("#cboAcuerdo", state="attached")
+    arbol = []
+    for ac in select2_listar(page, "cboAcuerdo"):
+        select2_seleccionar(page, "cboAcuerdo", ac["dato_id"])
+        esperar_ajax(page)
+        nodo = {"acuerdo_id": ac["dato_id"], "acuerdo": ac["texto"], "catalogos": []}
+        for cat in opciones_select(page, "cboCatalogo"):
+            page.select_option("#cboCatalogo", cat["value"])
+            esperar_ajax(page)
+            cats = opciones_select(page, "cboCategoria")
+            nodo["catalogos"].append({
+                "id": cat["value"], "nombre": cat["texto"],
+                "categorias": [{"id": c["value"], "nombre": c["texto"]} for c in cats],
+            })
+        arbol.append(nodo)
+    return arbol
 
 
-_CACHE_CATALOGO_ID: dict[str, str] = {}  # nombre_acuerdo_local -> catalogo_id (por proceso)
+def _obtener_arbol(pc_session, page=None, refrescar=False) -> list[dict]:
+    clave = (pc_session.usuario or "").lower()
+    if not refrescar and clave in _CACHE_ARBOL:
+        return _CACHE_ARBOL[clave]
+    if page is not None:
+        arbol = _escanear_arbol(page)
+    else:
+        with abrir_pagina(pc_session) as (pg, _d):
+            arbol = _escanear_arbol(pg)
+    if not arbol:
+        raise RuntimeError("Este usuario no tiene acuerdos disponibles en Plazo de entrega máximo.")
+    _CACHE_ARBOL[clave] = arbol
+    return arbol
 
 
-def _resolver_catalogo_id_por_acuerdo(session, nombre_acuerdo_local: str) -> str | None:
-    if nombre_acuerdo_local in _CACHE_CATALOGO_ID:
-        return _CACHE_CATALOGO_ID[nombre_acuerdo_local]
-
-    codigo_local = _codigo_desde_nombre_acuerdo(nombre_acuerdo_local)
-    if not codigo_local:
-        logger.warning(f"No se pudo extraer código de '{nombre_acuerdo_local}'")
-        return None
-
-    acuerdos = _obtener_acuerdos_dinamico(session)
-    acuerdo_match = None
-    for a in acuerdos:
-        if any(codigo_local in campo for campo in a["campos"]):
-            acuerdo_match = a
-            break
-    if not acuerdo_match:
-        logger.warning(f"No se encontró acuerdo real para código '{codigo_local}' — revisa el log RAW de tipo=1 arriba")
-        return None
-
-    catalogos = _obtener_catalogos_dinamico(session, acuerdo_match["id"])
-    if not catalogos:
-        logger.warning(f"Acuerdo id={acuerdo_match['id']} ({codigo_local}) no devolvió catálogos")
-        return None
-
-    catalogo_id = catalogos[0]["id"]
-    _CACHE_CATALOGO_ID[nombre_acuerdo_local] = catalogo_id
-    return catalogo_id
+def _nodo(arbol, acuerdo_nombre):
+    for a in arbol:
+        if a["acuerdo"] == acuerdo_nombre:
+            return a
+    raise RuntimeError(f"Acuerdo no reconocido para este usuario: {acuerdo_nombre}")
 
 
-def _get_departamentos(session, grupo_id, categoria_id) -> list[dict]:
-    body = f"3^{grupo_id}^{GRUPO_PADRE}^{categoria_id}"
-    r = session.post(f"{BASE_URL}/MejoraPlazo/obtenerFiltros", data=body, timeout=30)
-    r.raise_for_status()
-    result = []
-    for item in r.text.strip().split("¬"):
-        p = item.strip().split("^")
-        if len(p) >= 2 and p[0].strip():
-            result.append({"codigo": p[0].strip(), "nombre": p[1].strip()})
-    return result
+# ---------------- API para el router ----------------
+def listar_opciones(pc_session, refrescar: bool = False) -> list[dict]:
+    """Mismo formato que antes (familia = id de catálogo) -> el frontend casi no cambia."""
+    out = []
+    for ac in _obtener_arbol(pc_session, refrescar=refrescar):
+        cats = []
+        for ct in ac["catalogos"]:
+            for ca in ct["categorias"]:
+                cats.append({"familia": int(ct["id"]), "categoria": int(ca["id"]), "nombre": ca["nombre"]})
+        out.append({"acuerdo": ac["acuerdo"], "categorias": cats})
+    return out
 
 
-def _get_provincias(session, dep_codigo) -> list[dict]:
-    body = f"4^{dep_codigo}"
-    r = session.post(f"{BASE_URL}/MejoraPlazo/obtenerFiltros", data=body, timeout=30)
-    r.raise_for_status()
-    result = []
-    for item in r.text.strip().split("¬"):
-        p = item.strip().split("^")
-        if len(p) >= 2 and p[0].strip():
-            result.append({"codigo": p[0].strip(), "nombre": p[1].strip()})
-    return result
+def obtener_departamentos(pc_session, acuerdo: str, familia: int, categoria: int) -> list[dict]:
+    clave = ("dep", (pc_session.usuario or "").lower(), acuerdo, int(familia), int(categoria))
+    if clave in _CACHE_GEO:
+        return _CACHE_GEO[clave]
+    ac = _nodo(_obtener_arbol(pc_session), acuerdo)
+    with abrir_pagina(pc_session) as (page, _d):
+        _preparar(page, ac["acuerdo_id"], familia, categoria)
+        regs = opciones_select(page, "cboRegion")
+    res = [{"codigo": r["value"], "nombre": r["texto"]} for r in regs]
+    if res:
+        _CACHE_GEO[clave] = res
+    return res
 
 
-# ── WRAPPERS PÚBLICOS ───────────────────────────────────────────
-# El router los llama directamente para armar el selector de
-# Departamento/Provincia en el frontend — antes _get_departamentos y
-# _get_provincias solo se usaban dentro de este mismo archivo.
+def obtener_provincias(pc_session, acuerdo: str, familia: int, categoria: int, dep_codigo: str) -> list[dict]:
+    clave = ("prov", (pc_session.usuario or "").lower(), dep_codigo)
+    if clave in _CACHE_GEO:
+        return _CACHE_GEO[clave]
+    ac = _nodo(_obtener_arbol(pc_session), acuerdo)
+    with abrir_pagina(pc_session) as (page, _d):
+        _preparar(page, ac["acuerdo_id"], familia, categoria)
+        page.select_option("#cboRegion", dep_codigo)
+        esperar_ajax(page)
+        provs = opciones_select(page, "cboProvincia")
+    res = [{"codigo": p["value"], "nombre": p["texto"]} for p in provs]
+    if res:
+        _CACHE_GEO[clave] = res
+    return res
 
-def obtener_departamentos(pc_session, grupo_id: int, categoria_id: int) -> list[dict]:
-    if not pc_session or not pc_session.session:
-        return []
-    return _get_departamentos(pc_session.session, grupo_id, categoria_id)
+
+def _num_plazo(t) -> int | None:
+    m = re.search(r"\d+", t or "")
+    return int(m.group()) if m else None
 
 
-def obtener_provincias(pc_session, dep_codigo: str) -> list[dict]:
-    if not pc_session or not pc_session.session:
-        return []
-    return _get_provincias(pc_session.session, dep_codigo)
+# ---------------- paginación de resultados ----------------
+def _info(page) -> str:
+    loc = page.locator("#divNumRegistrosPorPagina")
+    return loc.first.inner_text() if loc.count() else ""
 
 
-def _consultar_y_modificar(session, catalogo_id, familia_id, categoria_id, prov_codigo) -> tuple[bool, int, str]:
+def _clic_y_esperar(page, loc):
+    antes = _info(page)
+    loc.click()
     try:
-        body_consulta = f"{catalogo_id}^{familia_id}^{categoria_id}^^{prov_codigo}"
-        raw = ""
-        for intento in range(1, 6):
-            try:
-                r = session.post(f"{BASE_URL}/MejoraPlazo/consultaMejoraPlazoEntrega",
-                                  data=body_consulta.encode("utf-8"), timeout=180)
-                r.raise_for_status()
-                txt = r.text or ""
-                if any(k in txt.lower() for k in ["login", "unauthorized", "<!doctype", "<html"]):
-                    raise ValueError("Sesión expirada en consulta")
-                raw = txt
-                break
-            except Exception as e:
-                espera = 5 * intento
-                logger.warning(f"Consulta falló intento {intento}/5 cat={categoria_id}: {e}")
-                if intento < 5:
-                    time.sleep(espera)
-                else:
-                    return False, 0, f"Consulta falló tras 5 intentos: {e}"
-
-        if not raw.strip():
-            return True, 0, "Sin fichas en esta provincia"
-
-        sep = "\u00af"
-        datos_raw = raw.split(sep)[1] if sep in raw else raw
-        data_ids = []
-        total_fichas = 0
-        for item in datos_raw.split("¬"):
-            item = item.strip()
-            if not item:
-                continue
-            p = item.split("^")
-            did = p[0].strip()
-            if did and "-" in did and did != "Nro":
-                total_fichas += 1
-                pv = p[6].strip() if len(p) > 6 else ""
-                pp = p[7].strip() if len(p) > 7 else ""
-                if pv != "1" and pp != "1":
-                    data_ids.append(did)
-
-        if not data_ids:
-            return True, 0, f"Todas las fichas ({total_fichas}) ya tienen plazo=1"
-
-        LOTE = 500
-        lotes = [data_ids[i:i + LOTE] for i in range(0, len(data_ids), LOTE)]
-        total_modificadas = 0
-        for num_lote, lote in enumerate(lotes, 1):
-            body_mod = "¬".join(f"{did}^{NUEVO_PLAZO}^^" for did in lote)
-            for intento in range(1, 6):
-                try:
-                    r_mod = session.post(f"{BASE_URL}/MejoraPlazo/modificarMejoraPlazoEntrega",
-                                          data=body_mod.encode("utf-8"), timeout=120)
-                    r_mod.raise_for_status()
-                    txt_mod = r_mod.text or ""
-                    if any(k in txt_mod.lower() for k in ["login", "unauthorized"]):
-                        raise ValueError("Sesión expirada en modificación")
-                    total_modificadas += len(lote)
-                    time.sleep(1)
-                    break
-                except Exception as e:
-                    espera = 5 * intento
-                    logger.warning(f"Modificación lote {num_lote} falló intento {intento}/5: {e}")
-                    if intento < 5:
-                        time.sleep(espera)
-                    else:
-                        return False, total_modificadas, f"Lote {num_lote}/{len(lotes)} falló tras 5 intentos"
-
-        return True, total_modificadas, f"{total_modificadas} fichas modificadas"
-    except Exception as e:
-        return False, 0, f"Excepción: {e}"
+        page.wait_for_function(
+            "t => ((document.querySelector('#divNumRegistrosPorPagina')||{}).innerText||'') !== t",
+            arg=antes, timeout=8000,
+        )
+    except PWTimeout:
+        pass
+    page.wait_for_timeout(150)
 
 
-def ejecutar_modificacion_plazo(pc_session, progreso: dict, seleccion: dict | None = None) -> list[dict]:
-    """
-    seleccion (opcional) = {
-        "acuerdos": ["EXT-CE-2024-3 ..."],           # nombres exactos = claves de ACUERDOS_MARCO
-        "categorias": [[326, 12180], [326, 12181]],  # pares [familia_id, categoria_id]
-        "departamento_codigo": "15",                 # NUEVO — opcional, restringe a 1 departamento
-        "provincia_codigo": "1501",                  # NUEVO — opcional, restringe a 1 provincia
-                                                       # (solo tiene efecto si departamento_codigo también viene)
+def _primera_pagina(page):
+    for _ in range(100):
+        activo = page.locator("#divPaginacion input.NavegaActivo")
+        if activo.count() and activo.first.get_attribute("value") == "1":
+            return
+        uno = page.locator("#divPaginacion input[value='1']")
+        if uno.count():
+            _clic_y_esperar(page, uno.first)
+            continue
+        ant = page.locator("#divPaginacion input[value='Anterior']")
+        if ant.count() == 0 or ant.first.is_disabled():
+            return
+        _clic_y_esperar(page, ant.first)
+
+
+def _siguiente(page) -> bool:
+    sig = page.locator("#divPaginacion input[value='Siguiente']")
+    if sig.count() == 0 or sig.first.is_disabled():
+        return False
+    antes = _info(page)
+    _clic_y_esperar(page, sig.first)
+    return _info(page) != antes
+
+
+def _leer_todas(page) -> list[dict]:
+    _primera_pagina(page)
+    filas: list[dict] = []
+    for _ in range(500):
+        filas += page.evaluate(_JS_FILAS)
+        if not _siguiente(page):
+            break
+    return filas
+
+
+def _asegurar_todas(page) -> int:
+    """Recorre TODAS las páginas y deja cada 'Plazo a publicar' en 1."""
+    arregladas = 0
+    _primera_pagina(page)
+    for _ in range(500):
+        inputs = page.locator("#tbData input.PlazoEntrega")
+        for k in range(inputs.count()):
+            inp = inputs.nth(k)
+            if inp.input_value().strip() != "1":
+                inp.fill("1")
+                inp.blur()
+                arregladas += 1
+        if not _siguiente(page):
+            break
+    return arregladas
+
+
+
+
+# ---------------- modo directo (fetch) ----------------
+TURBO_URL_C = BASE_URL + "/MejoraPlazo/consultaMejoraPlazoEntrega"
+TURBO_URL_M = BASE_URL + "/MejoraPlazo/modificarMejoraPlazoEntrega"
+TOKEN_P = "@@P@@"
+CONC = max(1, min(8, int(os.getenv("PLAZO_CONC", "4"))))   # peticiones simultáneas por región
+
+_JS_LOTE = r"""async ([urlC, urlM, tpl, token, provs, firmaVacia, puedeEnviar, conc]) => {
+  const H = {'content-type': 'text/plain;charset=UTF-8'};
+  const out = new Array(provs.length);
+  let i = 0;
+  async function uno(v) {
+    try {
+      const rc = await fetch(urlC, {method: 'POST', headers: H, body: tpl.split(token).join(v), credentials: 'include'});
+      if (rc.status !== 200) return {e: 'pendiente', m: 'consulta HTTP ' + rc.status};
+      const t = await rc.text();
+      if (t.indexOf('Nro^Imagen') < 0) {
+        if (firmaVacia !== null && t.trim() === firmaVacia) return {e: 'sin', n: 0};
+        return {e: 'pendiente', m: 'respuesta no reconocida'};
+      }
+      const partes = t.split('¯');
+      if (partes.length < 2) return {e: 'pendiente', m: 'formato inesperado'};
+      const filas = partes[1].split('¬').filter(x => x.trim() !== '');
+      if (filas.length === 0) return {e: 'sin', n: 0};
+      const ids = [];
+      let todas1 = true;
+      for (const f of filas) {
+        const c = f.split('^');
+        if (c.length < 10 || !c[0].endsWith('-' + v)) return {e: 'pendiente', m: 'fila inesperada'};
+        ids.push(c[0]);
+        if (parseInt(c[6], 10) !== 1) todas1 = false;
+      }
+      if (todas1) return {e: 'igual', n: ids.length};
+      if (!puedeEnviar) return {e: 'pendiente', m: 'formato de envío aún sin validar'};
+      const body = ids.map(x => x + '^1^^').join('¬');
+      const rm = await fetch(urlM, {method: 'POST', headers: H, body: body, credentials: 'include'});
+      const tm = (await rm.text()).trim();
+      if (rm.status === 200 && tm === 'OK') return {e: 'enviado', n: ids.length};
+      return {e: 'pendiente', m: 'envío respondió ' + rm.status + ': ' + tm.slice(0, 60)};
+    } catch (err) {
+      return {e: 'pendiente', m: 'excepción: ' + String(err).slice(0, 60)};
     }
-    Si seleccion es None (o viene vacía), se corre TODO — mismo
-    comportamiento de antes. Si viene con acuerdos/categorías, solo se
-    procesan esas. Si además viene departamento_codigo/provincia_codigo,
-    se filtra el barrido geográfico a esa zona — así recuperas el
-    control granular Categoría → Departamento → Provincia de tu bot
-    viejo en tkinter.
-    """
-    session = pc_session.session
+  }
+  async function w() {
+    while (true) {
+      const k = i++;
+      if (k >= provs.length) return;
+      out[k] = await uno(provs[k]);
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(conc, provs.length)}, w));
+  return out;
+}"""
+
+
+class _Turbo:
+    def __init__(self):
+        self.activo = os.getenv("PLAZO_TURBO", "1") != "0"   # PLAZO_TURBO=0 lo apaga
+        self.tpl = None            # plantilla de consulta de la región actual
+        self.firma_vacia = None    # respuesta real de "sin fichas"
+        self.mod_validado = False  # el cuerpo de envío coincidió con el del navegador
+
+
+def _cuerpo_modificar(texto: str, pv_value: str):
+    partes = texto.split("¯")
+    if len(partes) < 2:
+        return None
+    ids = []
+    for f in partes[1].split("¬"):
+        if not f.strip():
+            continue
+        c = f.split("^")
+        if len(c) < 10 or not c[0].endswith("-" + pv_value):
+            return None
+        ids.append(c[0])
+    return "¬".join(f"{i}^1^^" for i in ids) if ids else None
+
+
+def _turbo_aprender(turbo, cap: dict, pv_value: str, msg: str) -> bool:
+    """Tras una provincia hecha por navegador: aprende la plantilla de la región y valida el envío."""
+    try:
+        post = cap.get("c_post") or ""
+        if not post.endswith("^" + pv_value):
+            return False
+        turbo.tpl = post[: -len(pv_value)] + TOKEN_P
+        texto = cap.get("c_text") or ""
+        if "Nro^Imagen" not in texto:
+            if msg.startswith("Sin fichas") and turbo.firma_vacia is None and len(texto.strip()) < 600:
+                turbo.firma_vacia = texto.strip()
+            return True
+        m_post = cap.get("m_post")
+        if m_post and not turbo.mod_validado:
+            if _cuerpo_modificar(texto, pv_value) == m_post:
+                turbo.mod_validado = True
+            else:
+                turbo.activo = False
+                logger.warning("TURBO plazo desactivado: el cuerpo de envío armado no coincide con el del navegador")
+                return False
+        return True
+    except Exception as e:
+        logger.warning(f"TURBO plazo: no se pudo aprender la plantilla: {e}")
+        return False
+
+
+def _lote_directo(page, turbo, valores: list) -> list:
+    return page.evaluate(
+        _JS_LOTE,
+        [TURBO_URL_C, TURBO_URL_M, turbo.tpl, TOKEN_P, valores, turbo.firma_vacia, turbo.mod_validado, CONC],
+    )
+
+
+# ---------------- una provincia ----------------
+def _buscar_y_enviar(page, dialogos, cap: dict | None = None) -> tuple[bool, int, str]:
+    page.evaluate("() => { const t=document.getElementById('tbData'); if (t) t.innerHTML=''; }")
+    try:
+        with page.expect_response(lambda r: "consultaMejoraPlazoEntrega" in r.url, timeout=45000) as _ir:
+            page.get_by_text("Iniciar Búsqueda").first.click()
+        if cap is not None:
+            try:
+                cap["c_post"] = _ir.value.request.post_data or ""
+                cap["c_text"] = _ir.value.text()
+            except Exception:
+                pass
+    except PWTimeout:
+        logger.warning("La búsqueda no disparó consultaMejoraPlazoEntrega en 45s")
+    esperar_ajax(page, 500)
+
+    # Esperar a que aparezcan inputs de plazo O el mensaje "No se encontraron fichas"
+    try:
+        page.wait_for_function(
+            "() => document.querySelector('#tbData input.PlazoEntrega') || "
+            "/No se encontraron fichas/i.test((document.getElementById('tbData')||{}).innerText||'')",
+            timeout=10000,
+        )
+    except PWTimeout:
+        pass
+
+    if (page.locator("#tbData input.PlazoEntrega").count() == 0
+            or page.locator("#tbData tr.FilaDatos", has_text="No se encontraron fichas").count() > 0):
+        return True, 0, "Sin fichas en esta provincia"
+
+    # Total de registros de la provincia, leído del texto "Mostrando 1 a 10 de 49 Registros"
+    m_total = re.search(r"de\s+(\d+)", _info(page))
+    pendientes = int(m_total.group(1)) if m_total else page.locator("#tbData tr.FilaDatos").count()
+
+    # Salto rápido SOLO si la provincia cabe en una página y todas ya tienen plazo 1
+    # (no recorre páginas: mira únicamente lo que ya está en pantalla)
+    sig = page.locator("#divPaginacion input[value='Siguiente']")
+    una_sola_pagina = sig.count() == 0 or sig.first.is_disabled()
+    if una_sola_pagina:
+        vigentes = page.evaluate(_JS_FILAS)
+        if vigentes and all(_num_plazo(f["vig"]) == 1 for f in vigentes):
+            return True, 0, f"Sin cambios: las {len(vigentes)} fichas ya tienen plazo 1"
+
+    # 1) Poner 1 en la primera fila de la primera página
+    primero = page.locator("#tbData input.PlazoEntrega").first
+    primero.click()
+    primero.fill("1")
+    primero.blur()
+
+    # 2) "Aplicar a todos" (el portal lo copia a todas las filas de todas las páginas)
+    page.locator("#tbData input[onclick*='replicarValor(this,1)']").first.click()
+    page.wait_for_timeout(500)
+
+    # 3) Revisión rápida SOLO de la página actual (no recorre páginas)
+    sin_uno = page.evaluate(
+        "() => [...document.querySelectorAll('#tbData input.PlazoEntrega')].filter(i => i.value.trim() !== '1').length"
+    )
+    if sin_uno:
+        return False, 0, f"'Aplicar a todos' no puso 1 en {sin_uno} filas de la página"
+
+    del dialogos[:]
+    page.click("#btnEnviarDatos")
+    ok_btn = page.locator("._wModal_btn_ok:visible").first
+    ok_btn.wait_for(state="visible", timeout=15000)
+    try:
+        with page.expect_request(lambda r: "modificarMejoraPlazoEntrega" in r.url, timeout=15000) as _rq:
+            ok_btn.click()
+        if cap is not None:
+            cap["m_post"] = _rq.value.post_data or ""
+    except PWTimeout:
+        pass
+    page.wait_for_timeout(1000)
+    esperar_ajax(page, 300)
+    msgs = drenar_modales(page) + list(dialogos)
+    errores = [m for m in msgs if RE_ERROR.search(m)]
+    if errores:
+        return False, 0, f"Portal respondió: {errores[0][:120]}"
+    msg = f"{pendientes} fichas enviadas"
+    if msgs:
+        msg += f" · portal: {msgs[-1][:80]}"
+    return True, pendientes, msg
+
+
+# ---------------- ejecución principal ----------------
+def ejecutar_modificacion_plazo(pc_session, progreso: dict, seleccion: dict | None = None) -> list[dict]:
+    sel = seleccion or {}
+    acuerdos_ok = set(sel.get("acuerdos") or [])
+    cats_ok = {(int(c[0]), int(c[1])) for c in (sel.get("categorias") or [])}
+    dep_f = sel.get("departamento_codigo") or None
+    prov_f = sel.get("provincia_codigo") or None
     resultados: list[dict] = []
-
-    acuerdos_a_usar = seleccion.get("acuerdos") if seleccion else None
-    categorias_a_usar = seleccion.get("categorias") if seleccion else None
-    departamento_codigo = (seleccion.get("departamento_codigo") if seleccion else None) or None
-    provincia_codigo = (seleccion.get("provincia_codigo") if seleccion else None) or None
-    categorias_set = {tuple(c) for c in categorias_a_usar} if categorias_a_usar else None
-
-    combos = []
-    for nombre_acuerdo, data in ACUERDOS_MARCO.items():
-        if acuerdos_a_usar and nombre_acuerdo not in acuerdos_a_usar:
-            continue
-        catalogo_id = _resolver_catalogo_id_por_acuerdo(session, nombre_acuerdo)
-        if not catalogo_id:
-            logger.warning(f"Acuerdo '{nombre_acuerdo}' no se pudo resolver — se omite")
-            continue
-        for cat in data["categorias"]:
-            if categorias_set and (cat[0], cat[1]) not in categorias_set:
-                continue
-            combos.append((data["grupo_id"], cat, catalogo_id))
+    turbo = _Turbo()
 
     progreso.update({
-        "combinacion_actual": "Cargando departamentos/provincias...",
-        "combinaciones_completadas": 0, "total_combinaciones": 0,
-        "fichas_modificadas": 0, "combos_con_error": 0,
+        "combinacion_actual": "Abriendo navegador...", "combinaciones_completadas": 0,
+        "total_combinaciones": 0, "fichas_modificadas": 0, "combos_con_error": 0,
     })
 
-    tareas = []
-    for grupo_id, cat, catalogo_id in combos:
-        try:
-            deps = _get_departamentos(session, grupo_id, cat[1])
-        except Exception as e:
-            logger.warning(f"No se pudieron cargar departamentos de {cat[2]}: {e}")
-            continue
-
-        # Filtro geográfico: si se pidió un departamento específico, nos
-        # quedamos solo con ese — evita barrer los 25 departamentos
-        # cuando el usuario quería tocar uno solo.
-        if departamento_codigo:
-            deps = [d for d in deps if d["codigo"] == departamento_codigo]
-            if not deps:
-                logger.warning(
-                    f"Departamento '{departamento_codigo}' no aparece para {cat[2]} — se omite esta categoría"
-                )
+    with abrir_pagina(pc_session) as (page, dialogos):
+        arbol = _obtener_arbol(pc_session, page=page)
+        combos = []
+        for ac in arbol:
+            if acuerdos_ok and ac["acuerdo"] not in acuerdos_ok:
                 continue
+            for ct in ac["catalogos"]:
+                for ca in ct["categorias"]:
+                    if cats_ok and (int(ct["id"]), int(ca["id"])) not in cats_ok:
+                        continue
+                    combos.append((ac, ct, ca))
+        if not combos:
+            raise RuntimeError("Ninguna categoría seleccionada existe para este usuario.")
 
-        for dep in deps:
+        progreso["categorias"] = [
+            {"categoria": ca["nombre"], "acuerdo": ac["acuerdo"], "estado": "pendiente",
+             "provincias": 0, "con_error": 0, "fichas": 0, "sin_fichas": 0, "sin_cambios": 0}
+            for ac, ct, ca in combos
+        ]
+        actual = [None]
+
+        def cerrar_actual():
+            c = actual[0]
+            if c and c["estado"] == "en_curso":
+                c["estado"] = "con_errores" if c["con_error"] else "terminada"
+
+        def registrar(nombre, dep, prov, ok, n, msg):
+            resultados.append({"categoria": nombre, "departamento": dep, "provincia": prov,
+                               "fichas_modificadas": n, "ok": ok, "mensaje": msg})
+            progreso["combinaciones_completadas"] += 1
+            progreso["fichas_modificadas"] += n
+            c = actual[0]
+            if c:
+                c["provincias"] += 1
+                c["fichas"] += n
+                if ok and n == 0 and msg.startswith("Sin fichas"):
+                    c["sin_fichas"] += 1
+                if ok and n == 0 and msg.startswith("Sin cambios"):
+                    c["sin_cambios"] += 1
+            if not ok:
+                progreso["combos_con_error"] += 1
+                if c:
+                    c["con_error"] += 1
+
+        for idx, (ac, ct, ca) in enumerate(combos):
+            cerrar_actual()
+            actual[0] = progreso["categorias"][idx]
+            actual[0]["estado"] = "en_curso"
+            nombre = ca["nombre"]
+
+            def preparar():
+                _preparar(page, ac["acuerdo_id"], ct["id"], ca["id"])
+
             try:
-                provs = _get_provincias(session, dep["codigo"])
+                preparar()
+                regiones = opciones_select(page, "cboRegion")
             except Exception as e:
-                logger.warning(f"No se pudieron cargar provincias de {dep['nombre']}: {e}")
+                if sesion_caida(page):
+                    raise
+                captura(page, f"plazo_cat_{ca['id']}")
+                progreso["total_combinaciones"] += 1
+                registrar(nombre, "-", "-", False, 0, f"No se pudo preparar la categoría: {str(e)[:100]}")
                 continue
+            if dep_f:
+                regiones = [r for r in regiones if r["value"] == dep_f]
 
-            # Filtro geográfico fino: provincia específica dentro del
-            # departamento ya filtrado.
-            if provincia_codigo:
-                provs = [p for p in provs if p["codigo"] == provincia_codigo]
+            sucio = False
+            for reg in regiones:
+                try:
+                    if sucio:
+                        preparar()
+                        sucio = False
+                    page.select_option("#cboRegion", reg["value"])
+                    esperar_ajax(page)
+                    provs = opciones_select(page, "cboProvincia")
+                    if not provs:
+                        page.wait_for_timeout(1000)
+                        provs = opciones_select(page, "cboProvincia")
+                except Exception as e:
+                    if sesion_caida(page):
+                        raise
+                    sucio = True
+                    progreso["total_combinaciones"] += 1
+                    registrar(nombre, reg["texto"], "-", False, 0, f"Error leyendo provincias: {str(e)[:100]}")
+                    continue
+                if prov_f:
+                    provs = [p for p in provs if p["value"] == prov_f]
+                progreso["total_combinaciones"] += len(provs)
 
-            for prov in provs:
-                tareas.append((cat, dep, prov, catalogo_id))
+                pendientes = list(provs)
+                region_ok = False
+                lotes = 0
+                turbo.tpl = None
+                while pendientes:
+                    # ---- modo directo: resuelve en bloque las provincias restantes de la región ----
+                    if turbo.activo and region_ok and lotes < 2:
+                        lotes += 1
+                        progreso["combinacion_actual"] = f"{nombre} · {reg['texto']} (modo directo)"
+                        try:
+                            res = _lote_directo(page, turbo, [p["value"] for p in pendientes])
+                        except Exception as e:
+                            if sesion_caida(page):
+                                raise RuntimeError("La sesión de Perú Compras se cayó durante el plazo")
+                            logger.warning(f"TURBO plazo: lote falló, sigue por navegador: {e}")
+                            res = [{"e": "pendiente"}] * len(pendientes)
+                        resto = []
+                        for p_, r_ in zip(pendientes, res):
+                            if r_["e"] == "sin":
+                                registrar(nombre, reg["texto"], p_["texto"], True, 0,
+                                          "Sin fichas en esta provincia (directo)")
+                            elif r_["e"] == "igual":
+                                registrar(nombre, reg["texto"], p_["texto"], True, 0,
+                                          f"Sin cambios: las {r_['n']} fichas ya tienen plazo 1 (directo)")
+                            elif r_["e"] == "enviado":
+                                registrar(nombre, reg["texto"], p_["texto"], True, r_["n"],
+                                          f"{r_['n']} fichas enviadas (directo)")
+                            else:
+                                if r_.get("m"):
+                                    logger.info(f"TURBO plazo: {p_['texto']} va por navegador ({r_['m']})")
+                                resto.append(p_)
+                        pendientes = resto
+                        region_ok = False
+                        continue
 
-    progreso["total_combinaciones"] = len(tareas)
+                    # ---- navegador (como siempre) ----
+                    pv = pendientes.pop(0)
+                    progreso["combinacion_actual"] = f"{nombre} · {reg['texto']} / {pv['texto']}"
+                    cap = {}
+                    try:
+                        if sucio:
+                            preparar()
+                            page.select_option("#cboRegion", reg["value"])
+                            esperar_ajax(page)
+                            sucio = False
+                        page.select_option("#cboProvincia", pv["value"])
+                        ok, n, msg = _buscar_y_enviar(page, dialogos, cap)
+                    except Exception as e:
+                        if sesion_caida(page):
+                            raise RuntimeError("La sesión de Perú Compras se cayó durante el plazo")
+                        captura(page, f"plazo_{ca['id']}_{pv['value']}")
+                        sucio = True
+                        ok, n, msg = False, 0, f"Excepción: {str(e)[:120]}"
+                        cap = {}
+                    region_ok = bool(ok and turbo.activo and _turbo_aprender(turbo, cap, pv["value"], msg))
+                    registrar(nombre, reg["texto"], pv["texto"], ok, n, msg)
 
-    def _procesar(args):
-        cat, dep, prov, catalogo_id = args
-        ok, fichas, msg = _consultar_y_modificar(session, catalogo_id, cat[0], cat[1], prov["codigo"])
-        fila = {
-            "categoria": cat[2], "departamento": dep["nombre"], "provincia": prov["nombre"],
-            "fichas_modificadas": fichas, "ok": ok, "mensaje": msg,
-        }
-        resultados.append(fila)
-        progreso["combinacion_actual"] = f"{cat[2]} · {dep['nombre']} / {prov['nombre']}"
-        progreso["combinaciones_completadas"] += 1
-        progreso["fichas_modificadas"] += fichas
-        if not ok:
-            progreso["combos_con_error"] += 1
-        return fila
+        cerrar_actual()
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        list(ex.map(_procesar, tareas))
-
+    if progreso["total_combinaciones"] == 0:
+        raise RuntimeError("No se armó ninguna combinación categoría/región/provincia.")
     return resultados
-
-
-def listar_opciones() -> list[dict]:
-    """Para el selector del frontend: acuerdos + categorías disponibles,
-    sin tocar la sesión de Perú Compras (son datos locales conocidos)."""
-    return [
-        {
-            "acuerdo": nombre,
-            "categorias": [{"familia": c[0], "categoria": c[1], "nombre": c[2]} for c in data["categorias"]],
-        }
-        for nombre, data in ACUERDOS_MARCO.items()
-    ]

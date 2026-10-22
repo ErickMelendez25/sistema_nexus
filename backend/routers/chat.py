@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
+
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     """

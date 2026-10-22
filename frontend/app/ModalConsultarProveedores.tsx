@@ -20,6 +20,7 @@ import {
   Database,
   AlertTriangle,
   Building2,
+  FileSpreadsheet,
 } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
@@ -162,6 +163,7 @@ export function ModalConsultarProveedores({
   const [iniciandoHist, setIniciandoHist] = useState(false);
   const [sondeo, setSondeo] = useState(0); // ticks restantes de actualización automática
   const [mensaje, setMensaje] = useState("");
+  const [exportando, setExportando] = useState(false);
 
   const hayZona = !!(sel.zdep || sel.zprov || sel.zdist);
   const hayVendio = !!(texto.marca.trim() || texto.categoria.trim() || texto.catalogo.trim());
@@ -344,6 +346,45 @@ export function ModalConsultarProveedores({
     }
   }, []);
 
+  /* ---- exportar a Excel (respeta los filtros actuales) ---- */
+  const exportarExcel = useCallback(async () => {
+    setExportando(true);
+    setMensaje("");
+    try {
+      const params = new URLSearchParams();
+      if (textoDeb.q.trim()) params.set("q", textoDeb.q.trim());
+      if (textoDeb.marca.trim()) params.set("marca", textoDeb.marca.trim());
+      if (textoDeb.categoria.trim()) params.set("categoria", textoDeb.categoria.trim());
+      if (textoDeb.catalogo.trim()) params.set("catalogo", textoDeb.catalogo.trim());
+      if (sel.dep) params.set("departamento", sel.dep);
+      if (sel.prov) params.set("provincia", sel.prov);
+      if (sel.dist) params.set("distrito", sel.dist);
+      if (sel.zdep) params.set("zona_departamento", sel.zdep);
+      if (sel.zprov) params.set("zona_provincia", sel.zprov);
+      if (sel.zdist) params.set("zona_distrito", sel.zdist);
+
+      const r = await fetch(`${BASE}/exportar/excel?${params.toString()}`);
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.detail || `Error HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `proveedores_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMensaje("Excel descargado.");
+    } catch (e) {
+      setMensaje(e instanceof Error ? `No se pudo exportar: ${e.message}` : "No se pudo exportar el Excel.");
+    } finally {
+      setExportando(false);
+    }
+  }, [textoDeb, sel]);
+
   /* ---- cambios de filtros ---- */
   const setSelect = (campo: keyof Sel, valor: string) => {
     setSel((s) => {
@@ -441,6 +482,15 @@ export function ModalConsultarProveedores({
             >
               {sincronizandoHistorial ? <Loader2 size={12} className="animate-spin" /> : <History size={12} />}
               {sondeo > 0 ? "Actualizando historial…" : "Historial de OPs"}
+            </button>
+            <button
+              onClick={exportarExcel}
+              disabled={exportando || total === 0}
+              title="Descarga un Excel detallado con los proveedores que estás viendo (según los filtros)"
+              className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-[11px] font-medium text-emerald-700 px-2.5 py-1.5 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {exportando ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />}
+              {exportando ? "Generando…" : "Exportar Excel"}
             </button>
             <button
               onClick={onCerrar}

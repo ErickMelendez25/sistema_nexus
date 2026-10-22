@@ -14,6 +14,8 @@ interface EstadoStock {
   iniciado_en: string | null;
   terminado_en: string | null;
   error: string | null;
+  ya_aplicados?: number;
+  nuevos_pendientes?: number;
 }
 
 interface StatsCategoria {
@@ -22,6 +24,7 @@ interface StatsCategoria {
   pendientes: number;
   modificados: number;
   omitidos: number;
+  ya_aplicados?: number;
   errores: number;
 }
 
@@ -39,6 +42,7 @@ interface FilaStock {
 function badgeEstado(estado: string) {
   if (estado === "MODIFICADO") return "bg-emerald-50 text-emerald-700 border-emerald-200";
   if (estado === "OMITIDO") return "bg-slate-100 text-slate-500 border-slate-200";
+  if (estado === "YA_APLICADO") return "bg-sky-50 text-sky-700 border-sky-200";
   if (estado === "PENDIENTE") return "bg-amber-50 text-amber-700 border-amber-200";
   return "bg-red-50 text-red-700 border-red-200";
 }
@@ -57,6 +61,10 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
       const r = await fetchConToken(`${apiBase}/perucompras/stock/estado`);
       const data: EstadoStock = await r.json();
       setEstado(data);
+      if (data.fase === "ocioso" && data.error && intervalo.current) {
+        clearInterval(intervalo.current);
+        intervalo.current = null;
+      }
       if (data.fase === "listo" || data.fase === "completado") {
         await cargarCategorias();
         if (intervalo.current) {
@@ -116,20 +124,25 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
     }
   };
 
-  const verDetalle = async (categoria: string) => {
-    if (categoriaExpandida === categoria) {
-      setCategoriaExpandida(null);
-      return;
-    }
-    setCategoriaExpandida(categoria);
+  // silencioso = true cuando es un refresco automático: si falla una petición, no vacía la tabla
+  const cargarDetalle = async (categoria: string, silencioso = false) => {
     try {
       const params = new URLSearchParams({ categoria });
       const r = await fetchConToken(`${apiBase}/perucompras/stock/resultados?${params.toString()}`);
       const data = await r.json();
       setFilasDetalle(Array.isArray(data.filas) ? data.filas : []);
     } catch {
-      setFilasDetalle([]);
+      if (!silencioso) setFilasDetalle([]);
     }
+  };
+
+  const verDetalle = async (categoria: string) => {
+    if (categoriaExpandida === categoria) {
+      setCategoriaExpandida(null);
+      return;
+    }
+    setCategoriaExpandida(categoria);
+    await cargarDetalle(categoria);
   };
 
   const toggleCategoria = (cat: string) => {
@@ -151,6 +164,21 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
   const totalPendientesSeleccionadas = statsCategorias
     .filter((c) => seleccionadas.has(c.categoria))
     .reduce((acc, c) => acc + c.pendientes, 0);
+
+  // Tiempo real: mientras se modifica, refresca contadores y el detalle abierto cada 2 s.
+  // Al pasar a "completado" hace un último refresco (por si la verificación cambió algún estado).
+  useEffect(() => {
+    if (fase !== "modificando" && fase !== "completado") return;
+    const refrescar = () => {
+      cargarCategorias();
+      if (categoriaExpandida) cargarDetalle(categoriaExpandida, true);
+    };
+    refrescar();
+    if (fase === "completado") return;
+    const t = setInterval(refrescar, 2000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fase, categoriaExpandida]);
 
   return (
     <div>
@@ -199,7 +227,10 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
                 <CheckCircle2 size={12} /> Modificación completada — revisa la tabla de abajo
               </span>
             ) : fase === "listo" ? (
-              <span>Productos extraídos — selecciona categorías y modifica</span>
+              <span>
+                Productos extraídos · {estado.ya_aplicados ?? 0} ya aplicados (se saltan) ·{" "}
+                {estado.nuevos_pendientes ?? 0} pendientes por modificar
+              </span>
             ) : (
               <span>Sin extraer todavía</span>
             )}
@@ -252,6 +283,7 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
                     <th className="px-3 py-2 text-right">Pendientes</th>
                     <th className="px-3 py-2 text-right">Modificados</th>
                     <th className="px-3 py-2 text-right">Omitidos</th>
+                    <th className="px-3 py-2 text-right">Ya aplicados</th>
                     <th className="px-3 py-2 text-right">Errores</th>
                     <th className="px-3 py-2 text-center">Detalle</th>
                   </tr>
@@ -273,6 +305,7 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
                         <td className="px-3 py-2 text-right text-amber-700 font-semibold">{c.pendientes}</td>
                         <td className="px-3 py-2 text-right text-emerald-700 font-semibold">{c.modificados}</td>
                         <td className="px-3 py-2 text-right text-slate-500">{c.omitidos}</td>
+                        <td className="px-3 py-2 text-right text-sky-700">{c.ya_aplicados ?? 0}</td>
                         <td className="px-3 py-2 text-right text-red-600">{c.errores}</td>
                         <td className="px-3 py-2 text-center">
                           <button type="button" onClick={() => verDetalle(c.categoria)} className="text-[10px] font-semibold text-indigo-600 hover:text-indigo-800">
@@ -282,7 +315,7 @@ export default function ModificarStock({ apiBase, uid }: { apiBase: string; uid:
                       </tr>
                       {categoriaExpandida === c.categoria && (
                         <tr>
-                          <td colSpan={8} className="bg-slate-50/60 px-3 py-3">
+                          <td colSpan={9} className="bg-slate-50/60 px-3 py-3">
                             <table className="w-full text-[11px]">
                               <thead className="text-slate-500">
                                 <tr>

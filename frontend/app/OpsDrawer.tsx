@@ -1106,6 +1106,8 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
       if (u.nombre_completo) mapaUsuarios.set(String(u.nombre_completo).trim().toLowerCase(), u);
     });
 
+    const empresasCat: EmpresaOption[] = await listarEmpresas().catch(() => []);
+
     // Carga una imagen remota como blob (evita el problema de CORS de
     // <img crossOrigin>, que muchos servidores no soportan para
     // lectura de píxeles) y la recorta en círculo con un canvas — si
@@ -1248,6 +1250,138 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
 
     encabezarPagina();
 
+    type GrupoPdf = { opReal: any | null; codigos: string[] };
+
+    const esImagenUrl = (u: string) => /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(u);
+
+    // Descarga la imagen, la reescala y la devuelve como JPEG listo para jsPDF.
+    const cargarImagenPdf = async (
+      url: string
+    ): Promise<{ dataUrl: string; w: number; h: number } | null> => {
+      try {
+        const resp = await fetch(url, { mode: "cors" });
+        if (!resp.ok) return null;
+        const blob = await resp.blob();
+        const dataOriginal: string = await new Promise((res, rej) => {
+          const fr = new FileReader();
+          fr.onload = () => res(fr.result as string);
+          fr.onerror = () => rej(new Error("FileReader falló"));
+          fr.readAsDataURL(blob);
+        });
+        const img = new Image();
+        await new Promise<void>((res, rej) => {
+          img.onload = () => res();
+          img.onerror = () => rej(new Error("Image falló"));
+          img.src = dataOriginal;
+        });
+        const escala = Math.min(1, 1400 / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * escala));
+        canvas.height = Math.max(1, Math.round(img.height * escala));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        return { dataUrl: canvas.toDataURL("image/jpeg", 0.85), w: canvas.width, h: canvas.height };
+      } catch (e) {
+        console.warn("⚠️ PDF evidencia: no se pudo cargar", url, e);
+        return null;
+      }
+    };
+
+    // Dibuja, debajo de una OP, todas sus evidencias (fotos de Helbot + archivos del ERP).
+    const dibujarEvidenciasGrupo = async (grupo: GrupoPdf) => {
+      // Solo las imágenes de "Fotos y documentos" de cada producto de la OP
+      const items: { titulo: string; url: string }[] = [];
+      const vistas = new Set<string>();
+
+      for (const codigo of grupo.codigos) {
+        try {
+          const r = await fetch(
+            `${API_BASE}/erp/ordenes/${venta.id}/productos/${encodeURIComponent(codigo)}/imagenes`
+          );
+          const lista: any[] = r.ok ? await r.json() : [];
+          lista.forEach((im, i) => {
+            const url = im.url || `${API_BASE}/archivos/${im.ruta_archivo}`;
+            if (!esImagenUrl(url) || vistas.has(url)) return; // solo imágenes
+            vistas.add(url);
+            items.push({ titulo: `Evidencia ${codigo} (${i + 1})`, url });
+          });
+        } catch {}
+      }
+
+      if (items.length === 0) return;
+
+      const asegurarEspacio = (alto: number) => {
+        if (y + alto > finPagina) {
+          doc.addPage();
+          y = 50;
+          encabezarPagina();
+        }
+      };
+
+      asegurarEspacio(40);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(109, 40, 217);
+      doc.text(
+        `Evidencias — ${grupo.opReal ? "OP " + (grupo.opReal.codigoOp || `#${grupo.opReal.id}`) : "productos sin OP"}`,
+        margenX,
+        y
+      );
+      y += 16;
+
+      // Cuadrícula de 2 columnas: cada celda mide (anchoUtil - separación) / 2
+      const separacion = 15;
+      const anchoCelda = (anchoUtil - separacion) / 2;
+      const altoMaxImg = 190;
+
+      for (let i = 0; i < items.length; i += 2) {
+        const fila = items.slice(i, i + 2);
+
+        // Cargar las imágenes de la fila y calcular su tamaño dentro de la celda
+        const cargadas = await Promise.all(
+          fila.map(async (item) => {
+            const img = await cargarImagenPdf(item.url);
+            if (!img) return { item, img: null as null, w: 0, h: 0 };
+            const esc = Math.min(anchoCelda / img.w, altoMaxImg / img.h);
+            return { item, img, w: img.w * esc, h: img.h * esc };
+          })
+        );
+
+        // Alto de la fila = la imagen más alta + título + margen
+        const altoFila = Math.max(...cargadas.map((c) => (c.img ? c.h : 14))) + 24;
+        asegurarEspacio(altoFila);
+
+        cargadas.forEach((c, col) => {
+          const x = margenX + col * (anchoCelda + separacion);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+
+          if (!c.img) {
+            doc.setTextColor(79, 70, 229);
+            doc.textWithLink(`${c.item.titulo} — abrir imagen`, x, y + 8, { url: c.item.url });
+            doc.setTextColor(0, 0, 0);
+            return;
+          }
+
+          // Título pequeño (recortado si es largo para que no pase a la otra columna)
+          doc.setTextColor(100, 116, 139);
+          const tituloRecortado = doc.splitTextToSize(c.item.titulo, anchoCelda)[0];
+          doc.text(tituloRecortado, x, y + 8);
+          doc.setTextColor(0, 0, 0);
+
+          // Imagen centrada dentro de su celda
+          const xImg = x + (anchoCelda - c.w) / 2;
+          doc.addImage(c.img.dataUrl, "JPEG", xImg, y + 14, c.w, c.h);
+        });
+
+        y += altoFila;
+      }
+      y += 10;
+    };
+
     // Mismo criterio de orden que usa la UI (productosOrdenados): las
     // OP ya generadas van primero, ordenadas por su código; los
     // productos sin OP real quedan al final.
@@ -1269,11 +1403,22 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
 
     let opAnteriorId: number | null = null;
     let esPrimerGrupo = true;
+    let grupoActual = null as GrupoPdf | null;
 
     for (const p of productos) {
       const codigo = String((p as any).codigo ?? (p as any).id ?? "").trim();
-      const seg =
-        seguimientos.find((s: any) => String(s.producto_codigo).trim() === codigo) || {};
+      const segPorCodigo = seguimientos.find((s: any) => String(s.producto_codigo).trim() === codigo);
+      const ordenEstadoPdf: Record<string, number> = { subido: 3, confirmado: 2, preview: 1, pendiente: 0 };
+      const segPorDescripcion = !segPorCodigo
+        ? seguimientos
+            .filter(
+              (s: any) =>
+                (s.producto_descripcion || "").trim().toLowerCase() ===
+                String((p as any).descripcion || "").trim().toLowerCase()
+            )
+            .sort((a: any, b: any) => (ordenEstadoPdf[b.estado] ?? 0) - (ordenEstadoPdf[a.estado] ?? 0))[0]
+        : null;
+      const seg: any = segPorCodigo || segPorDescripcion || {};
 
       const opReal: any = (ops || []).find((op: any) =>
         (op.productos || []).some((pr: any) => String(pr.codigo ?? "").trim() === codigo)
@@ -1296,15 +1441,26 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
           ? Number(productoErpReal.total)
           : null;
 
-      const badge = badgeSeguimiento(seg.estado);
+      const vinoDelFormulario = seg.estado === "confirmado" || seg.estado === "subido";
+      const badge = opReal
+        ? vinoDelFormulario
+          ? { texto: "Formulario · Ya en el ERP" }
+          : { texto: "Llenado directo en el ERP" }
+        : badgeSeguimiento(seg.estado);
       const esAgencia = (seg.tipo_envio || "").toUpperCase() === "AGENCIA";
-      const empresaNombre = seg.empresa_nombre || opReal?.empresa?.razonSocial || "";
+      const empresaNombre =
+        empresasCat.find((e) => String(e.id) === String(opReal?.empresaId))?.razonSocial ||
+        opReal?.empresa?.razonSocial ||
+        seg.empresa_nombre ||
+        "";
       const proveedorGrupo = opReal?.proveedor?.razonSocial || seg.proveedor_nombre || "";
 
       // Encabezado de grupo — solo cuando cambia la OP a la que pertenece
       if ((opReal?.id ?? null) !== opAnteriorId) {
+        // Antes de empezar la nueva OP, se cierran las evidencias de la anterior
+        if (grupoActual) await dibujarEvidenciasGrupo(grupoActual);
+        grupoActual = { opReal: opReal || null, codigos: [] };
         opAnteriorId = opReal?.id ?? null;
-
         // Separación clara entre un grupo de OP y el siguiente — no se
         // aplica antes del primer grupo, para no dejar un hueco raro
         // pegado al encabezado de la página.
@@ -1360,6 +1516,7 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
         y += lineasTitulo.length * 13 + 4;
       }
 
+      grupoActual?.codigos.push(codigo);
       // IMPORTANTE: fijar la fuente ANTES de calcular el envoltorio de
       // texto — splitTextToSize mide el ancho según la fuente/tamaño
       // ACTIVOS en el momento en que se llama, no la que se use luego
@@ -1370,7 +1527,19 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       const descripcionLineas = doc.splitTextToSize(String((p as any).descripcion || ""), 320);
-      const alturaCard = Math.max(descripcionLineas.length * 11 + 70, 96);
+
+      // La marca se envuelve en varias líneas si es larga (ancho de la columna izquierda: 320)
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      const marcaTexto = (p as any).marca ? `MARCA: ${String((p as any).marca)}` : "";
+      const marcaLineas: string[] = marcaTexto ? doc.splitTextToSize(marcaTexto, 320) : [];
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+
+      const alturaCard = Math.max(
+        descripcionLineas.length * 11 + marcaLineas.length * 12 + 92,
+        110
+      );
 
       if (y + alturaCard > finPagina) {
         doc.addPage();
@@ -1401,21 +1570,24 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
-      let xTag = colIzqX;
-      const marca = (p as any).marca ? String((p as any).marca) : null;
-      if (marca) {
-        doc.text(marca, xTag, yIzq);
-        xTag += doc.getTextWidth(marca) + 16;
+
+      // Fila 1: marca (envuelta, nunca invade la columna derecha)
+      if (marcaLineas.length > 0) {
+        doc.text(marcaLineas, colIzqX, yIzq);
+        yIzq += marcaLineas.length * 12;
       }
+
+      // Fila 2: cantidad · precio unitario · total (siempre cabe en 320 de ancho)
+      let xTag = colIzqX;
       if (cantidadMostrar != null) {
-        const txtCant = `Cant: ${cantidadMostrar} ${(p as any).unidadMedida || ""}`;
+        const txtCant = `Cant: ${cantidadMostrar} ${(p as any).unidadMedida || ""}`.trim();
         doc.text(txtCant, xTag, yIzq);
-        xTag += doc.getTextWidth(txtCant) + 16;
+        xTag += doc.getTextWidth(txtCant) + 14;
       }
       if (precioMostrar != null) {
         const txtPrecio = `S/ ${precioMostrar.toFixed(2)} c/u`;
         doc.text(txtPrecio, xTag, yIzq);
-        xTag += doc.getTextWidth(txtPrecio) + 16;
+        xTag += doc.getTextWidth(txtPrecio) + 14;
       }
       if (totalMostrar != null) {
         doc.setTextColor(5, 150, 105);
@@ -1474,6 +1646,9 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
 
       y += alturaCard + 12;
     }
+
+    // Evidencias de la última OP (las anteriores se dibujan al cambiar de OP)
+    if (grupoActual) await dibujarEvidenciasGrupo(grupoActual);
 
     return doc;
   };

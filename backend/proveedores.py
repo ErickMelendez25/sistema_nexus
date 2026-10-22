@@ -28,6 +28,11 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
+from fastapi.responses import Response
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+import io
 
 from erp_login import erp_session, ERP_API_BASE
 from db import get_conn
@@ -743,6 +748,53 @@ def filtros(
     finally:
         conn.close()
 
+def _filtros_where(q, departamento, provincia, distrito, marca, categoria, catalogo,
+                   zona_departamento, zona_provincia, zona_distrito, activo):
+    """Misma lógica de filtros que usa el buscador. La comparten la lista y el Excel."""
+    where, params = ["1=1"], []
+
+    if activo is not None:
+        where.append("p.activo = %s"); params.append(1 if activo else 0)
+
+    if q and q.strip():
+        qn, dq = norm(q), _telefono_key(q)
+        partes = ["p.razon_social_norm LIKE %s", "p.ruc LIKE %s",
+                  "EXISTS (SELECT 1 FROM proveedor_contactos c WHERE c.proveedor_id=p.id AND c.nombre LIKE %s)"]
+        params += [f"%{qn}%", f"%{q.strip()}%", f"%{q.strip()}%"]
+        if len(dq) >= 4:
+            partes.append("EXISTS (SELECT 1 FROM proveedor_contactos c WHERE c.proveedor_id=p.id AND c.telefono_key LIKE %s)")
+            params.append(f"%{dq}%")
+        where.append("(" + " OR ".join(partes) + ")")
+
+    for col, val in (("departamento_norm", departamento), ("provincia_norm", provincia), ("distrito_norm", distrito)):
+        if val and norm(val):
+            where.append(f"p.{col} = %s"); params.append(norm(val))
+
+    attrs = [("marca", marca), ("categoria", categoria), ("catalogo", catalogo)]
+    zonas = [("entrega_departamento", zona_departamento), ("entrega_provincia", zona_provincia), ("entrega_distrito", zona_distrito)]
+    hay_zona = any(v and norm(v) for _, v in zonas)
+
+    if hay_zona:
+        h_cond, h_par = [], []
+        for col, val in attrs:
+            if val and norm(val):
+                h_cond.append(f"h.{col}_norm LIKE %s"); h_par.append(f"%{norm(val)}%")
+        for col, val in zonas:
+            if val and norm(val):
+                h_cond.append(f"h.{col}_norm = %s"); h_par.append(norm(val))
+        where.append("EXISTS (SELECT 1 FROM proveedor_historial h WHERE h.proveedor_id=p.id AND " + " AND ".join(h_cond) + ")")
+        params += h_par
+    else:
+        for col, val in attrs:
+            if val and norm(val):
+                where.append(
+                    f"(EXISTS (SELECT 1 FROM proveedor_historial h WHERE h.proveedor_id=p.id AND h.{col}_norm LIKE %s)"
+                    " OR EXISTS (SELECT 1 FROM proveedor_etiquetas e WHERE e.proveedor_id=p.id AND e.tipo=%s AND e.valor_norm LIKE %s))"
+                )
+                params += [f"%{norm(val)}%", col, f"%{norm(val)}%"]
+
+    return " AND ".join(where), params
+
 
 @router.get("")
 def buscar_proveedores(
@@ -760,53 +812,10 @@ def buscar_proveedores(
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
 ):
-    where, params = ["1=1"], []
-
-    if activo is not None:
-        where.append("p.activo = %s"); params.append(1 if activo else 0)
-
-    if q and q.strip():
-        qn, dq = norm(q), _telefono_key(q)
-        partes = ["p.razon_social_norm LIKE %s", "p.ruc LIKE %s",
-                  "EXISTS (SELECT 1 FROM proveedor_contactos c WHERE c.proveedor_id=p.id AND c.nombre LIKE %s)"]
-        params += [f"%{qn}%", f"%{q.strip()}%", f"%{q.strip()}%"]
-        if len(dq) >= 4:
-            partes.append("EXISTS (SELECT 1 FROM proveedor_contactos c WHERE c.proveedor_id=p.id AND c.telefono_key LIKE %s)")
-            params.append(f"%{dq}%")
-        where.append("(" + " OR ".join(partes) + ")")
-
-    # ubicación del proveedor
-    for col, val in (("departamento_norm", departamento), ("provincia_norm", provincia), ("distrito_norm", distrito)):
-        if val and norm(val):
-            where.append(f"p.{col} = %s"); params.append(norm(val))
-
-    # historial de OPs
-    attrs = [("marca", marca), ("categoria", categoria), ("catalogo", catalogo)]
-    zonas = [("entrega_departamento", zona_departamento), ("entrega_provincia", zona_provincia), ("entrega_distrito", zona_distrito)]
-    hay_zona = any(v and norm(v) for _, v in zonas)
-
-    if hay_zona:
-        # Todo en la MISMA fila del historial: "marca X hacia Arequipa" = la misma OP
-        h_cond, h_par = [], []
-        for col, val in attrs:
-            if val and norm(val):
-                h_cond.append(f"h.{col}_norm LIKE %s"); h_par.append(f"%{norm(val)}%")
-        for col, val in zonas:
-            if val and norm(val):
-                h_cond.append(f"h.{col}_norm = %s"); h_par.append(norm(val))
-        where.append("EXISTS (SELECT 1 FROM proveedor_historial h WHERE h.proveedor_id=p.id AND " + " AND ".join(h_cond) + ")")
-        params += h_par
-    else:
-        # Sin zona: historial de OPs O etiqueta manual, por cada atributo
-        for col, val in attrs:
-            if val and norm(val):
-                where.append(
-                    f"(EXISTS (SELECT 1 FROM proveedor_historial h WHERE h.proveedor_id=p.id AND h.{col}_norm LIKE %s)"
-                    " OR EXISTS (SELECT 1 FROM proveedor_etiquetas e WHERE e.proveedor_id=p.id AND e.tipo=%s AND e.valor_norm LIKE %s))"
-                )
-                params += [f"%{norm(val)}%", col, f"%{norm(val)}%"]
-
-    where_sql = " AND ".join(where)
+    where_sql, params = _filtros_where(
+        q, departamento, provincia, distrito, marca, categoria, catalogo,
+        zona_departamento, zona_provincia, zona_distrito, activo,
+    )
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -855,6 +864,222 @@ def buscar_proveedores(
     finally:
         conn.close()
     return {"total": total, "page": page, "limit": limit, "items": items}
+
+
+@router.get("/exportar/excel")
+def exportar_excel(
+    q: Optional[str] = None,
+    departamento: Optional[str] = None,
+    provincia: Optional[str] = None,
+    distrito: Optional[str] = None,
+    marca: Optional[str] = None,
+    categoria: Optional[str] = None,
+    catalogo: Optional[str] = None,
+    zona_departamento: Optional[str] = None,
+    zona_provincia: Optional[str] = None,
+    zona_distrito: Optional[str] = None,
+    activo: Optional[bool] = None,
+):
+    """Excel detallado de los proveedores (respeta los mismos filtros del buscador)."""
+    where_sql, params = _filtros_where(
+        q, departamento, provincia, distrito, marca, categoria, catalogo,
+        zona_departamento, zona_provincia, zona_distrito, activo,
+    )
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT p.* FROM proveedores p WHERE {where_sql} ORDER BY p.activo DESC, p.razon_social_norm",
+                tuple(params),
+            )
+            provs = cur.fetchall()
+            if not provs:
+                raise HTTPException(status_code=404, detail="No hay proveedores con esos filtros")
+
+            ids = [p["id"] for p in provs]
+            contactos_db, etiquetas_db, hist_db = [], [], []
+            for i in range(0, len(ids), 500):
+                trozo = ids[i:i + 500]
+                fmt = ",".join(["%s"] * len(trozo))
+                cur.execute(f"SELECT * FROM proveedor_contactos WHERE proveedor_id IN ({fmt}) ORDER BY proveedor_id, origen, id", tuple(trozo))
+                contactos_db += cur.fetchall()
+                cur.execute(f"SELECT * FROM proveedor_etiquetas WHERE proveedor_id IN ({fmt}) ORDER BY proveedor_id, tipo, valor", tuple(trozo))
+                etiquetas_db += cur.fetchall()
+                cur.execute(
+                    f"SELECT * FROM proveedor_historial WHERE proveedor_id IN ({fmt}) "
+                    "ORDER BY proveedor_id, orden_compra_id DESC, op_id DESC, producto_codigo",
+                    tuple(trozo),
+                )
+                hist_db += cur.fetchall()
+    finally:
+        conn.close()
+
+    por_id = {p["id"]: p for p in provs}
+    c_por, e_por, h_por = {}, {}, {}
+    for c in contactos_db:
+        c_por.setdefault(c["proveedor_id"], []).append(c)
+    for e in etiquetas_db:
+        e_por.setdefault(e["proveedor_id"], []).append(e)
+    for h in hist_db:
+        h_por.setdefault(h["proveedor_id"], []).append(h)
+
+    def fecha(d):
+        return d.strftime("%Y-%m-%d %H:%M") if d else ""
+
+    # ---------- Hoja: Proveedores ----------
+    cols_prov = [
+        ("N°", 6), ("ID ERP", 9), ("Razón social", 42), ("RUC", 14), ("Estado", 11),
+        ("Dirección", 45), ("Departamento", 16), ("Provincia", 16), ("Distrito", 16),
+        ("Teléfono ERP", 16), ("Email", 30), ("Todos los teléfonos", 32),
+        ("Contactos (nombre: teléfono)", 50), ("N° contactos", 11),
+        ("N° OPs", 9), ("N° productos vendidos", 12),
+        ("Marcas que vendió", 45), ("Categorías que vendió", 45), ("Catálogos que vendió", 40),
+        ("Zonas donde entregó (dpto.)", 38), ("Etiquetas manuales", 40), ("Última sincronización ERP", 18),
+    ]
+    filas_prov = []
+    for n, p in enumerate(provs, 1):
+        cs = c_por.get(p["id"], [])
+        es = e_por.get(p["id"], [])
+        hs = h_por.get(p["id"], [])
+
+        def uniq(campo, hs=hs):
+            return ", ".join(sorted({h[campo] for h in hs if h[campo]}))
+
+        telefonos, vistos = [], set()
+        for t in [p.get("telefono_erp")] + [c.get("telefono") for c in cs]:
+            k = _telefono_key(t)
+            if t and k and k not in vistos:
+                vistos.add(k)
+                telefonos.append(t)
+
+        filas_prov.append([
+            n, p["erp_id"], p["razon_social"], p["ruc"] or "",
+            "ACTIVO" if p["activo"] else "INACTIVO",
+            p["direccion"] or "", p["departamento"] or "", p["provincia"] or "", p["distrito"] or "",
+            p["telefono_erp"] or "", p["email"] or "", " | ".join(telefonos),
+            " | ".join(f"{c['nombre'] or 'Sin nombre'}: {c['telefono'] or '-'}" for c in cs),
+            len(cs),
+            len({h["op_id"] for h in hs}), len(hs),
+            uniq("marca"), uniq("categoria"), uniq("catalogo"), uniq("entrega_departamento"),
+            "; ".join(f"{e['tipo']}: {e['valor']}" for e in es),
+            fecha(p.get("sincronizado_en")),
+        ])
+
+    # ---------- Hoja: Historial de OPs ----------
+    cols_hist = [
+        ("Proveedor", 40), ("RUC", 14), ("Dpto. del proveedor", 16),
+        ("N° OCAM", 22), ("ID orden de compra", 12), ("ID OP", 10),
+        ("Código producto", 16), ("Descripción producto", 60),
+        ("Marca", 22), ("Categoría", 28), ("Catálogo", 28),
+        ("Entrega: departamento", 18), ("Entrega: provincia", 18), ("Entrega: distrito", 18),
+    ]
+    filas_hist = []
+    for pid, hs in h_por.items():
+        p = por_id[pid]
+        for h in hs:
+            filas_hist.append([
+                p["razon_social"], p["ruc"] or "", p["departamento"] or "",
+                h["numero_ocam"] or "", h["orden_compra_id"], h["op_id"],
+                h["producto_codigo"] or "", h["producto_descripcion"] or "",
+                h["marca"] or "", h["categoria"] or "", h["catalogo"] or "",
+                h["entrega_departamento"] or "", h["entrega_provincia"] or "", h["entrega_distrito"] or "",
+            ])
+    filas_hist.sort(key=lambda f: (f[0], -int(f[4]), -int(f[5])))
+
+    # ---------- Hoja: Contactos ----------
+    cols_cont = [
+        ("Proveedor", 40), ("RUC", 14), ("Nombre contacto", 28), ("Cargo", 20),
+        ("Teléfono", 18), ("Email", 32), ("Origen", 10), ("Registrado por", 20),
+    ]
+    filas_cont = [
+        [por_id[c["proveedor_id"]]["razon_social"], por_id[c["proveedor_id"]]["ruc"] or "",
+         c["nombre"] or "", c["cargo"] or "", c["telefono"] or "", c["email"] or "",
+         (c["origen"] or "").upper(), c["registrado_por"] or ""]
+        for c in contactos_db
+    ]
+
+    # ---------- Hoja: Etiquetas manuales ----------
+    cols_et = [("Proveedor", 40), ("RUC", 14), ("Tipo", 12), ("Valor", 35), ("Creado por", 20)]
+    filas_et = [
+        [por_id[e["proveedor_id"]]["razon_social"], por_id[e["proveedor_id"]]["ruc"] or "",
+         e["tipo"], e["valor"], e["creado_por"] or ""]
+        for e in etiquetas_db
+    ]
+
+    # ---------- Armar el libro ----------
+    wb = Workbook()
+    azul = PatternFill("solid", fgColor="4F46E5")
+
+    def hoja(titulo, columnas, filas):
+        ws = wb.create_sheet(titulo)
+        ws.append([c[0] for c in columnas])
+        for f in filas:
+            ws.append(f)
+        for idx, (_, ancho) in enumerate(columnas, 1):
+            ws.column_dimensions[get_column_letter(idx)].width = ancho
+            celda = ws.cell(row=1, column=idx)
+            celda.font = Font(bold=True, color="FFFFFF")
+            celda.fill = azul
+            celda.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[1].height = 32
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(columnas))}{max(1, len(filas) + 1)}"
+
+    # Resumen (primera hoja)
+    res = wb.active
+    res.title = "Resumen"
+    filtros_txt = [
+        (n, v) for n, v in (
+            ("Búsqueda", q), ("Marca", marca), ("Categoría", categoria), ("Catálogo", catalogo),
+            ("Entrega: departamento", zona_departamento), ("Entrega: provincia", zona_provincia),
+            ("Entrega: distrito", zona_distrito), ("Proveedor ubicado en dpto.", departamento),
+            ("Proveedor ubicado en prov.", provincia), ("Proveedor ubicado en dist.", distrito),
+        ) if v and str(v).strip()
+    ]
+    res["A1"] = "REPORTE DE PROVEEDORES"
+    res["A1"].font = Font(bold=True, size=14, color="4F46E5")
+    datos_res = [
+        ("Generado el", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        ("Filtros aplicados", "; ".join(f"{n}: {v}" for n, v in filtros_txt) or "Ninguno (todos los proveedores)"),
+        ("Proveedores exportados", len(provs)),
+        ("   Activos", sum(1 for p in provs if p["activo"])),
+        ("   Inactivos", sum(1 for p in provs if not p["activo"])),
+        ("Proveedores con historial de OPs", len(h_por)),
+        ("Proveedores sin historial de OPs", len(provs) - len(h_por)),
+        ("OPs distintas en el historial", len({h["op_id"] for h in hist_db})),
+        ("Filas de productos en el historial", len(hist_db)),
+        ("Contactos", len(contactos_db)),
+        ("Etiquetas manuales", len(etiquetas_db)),
+    ]
+    for i, (k, v) in enumerate(datos_res, start=3):
+        res.cell(row=i, column=1, value=k).font = Font(bold=True)
+        res.cell(row=i, column=2, value=v)
+    res.column_dimensions["A"].width = 38
+    res.column_dimensions["B"].width = 90
+    fila = len(datos_res) + 5
+    res.cell(row=fila, column=1, value="Hojas del libro").font = Font(bold=True)
+    for j, txt in enumerate([
+        "Proveedores: 1 fila por proveedor con todos sus datos y resumen de lo que vendió.",
+        "Historial de OPs: 1 fila por producto vendido (usa los filtros de la fila 1 para buscar por categoría, producto, marca o región).",
+        "Contactos: todos los contactos y teléfonos.",
+        "Etiquetas manuales: etiquetas agregadas a mano en Nexus.",
+    ], start=fila + 1):
+        res.cell(row=j, column=1, value=txt)
+
+    hoja("Proveedores", cols_prov, filas_prov)
+    hoja("Historial de OPs", cols_hist, filas_hist)
+    hoja("Contactos", cols_cont, filas_cont)
+    hoja("Etiquetas manuales", cols_et, filas_et)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    nombre = f"proveedores_{datetime.now():%Y%m%d_%H%M}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
 
 
 @router.get("/{proveedor_id}")
