@@ -1604,7 +1604,32 @@ def listar_imagenes_producto(orden_compra_id: int, producto_codigo: str):
 
 
 
+@app.get("/erp/archivos-proxy")
+def archivos_proxy(ruta: str):
+    """Sirve un archivo subido en Helbot a través del backend, para que el
+    frontend pueda leerlo sin problemas de CORS y meterlo dentro del PDF."""
+    import mimetypes as _mimetypes_proxy
+    import requests as _requests_proxy
+    from fastapi import Response as _ResponseProxy
 
+    if not ruta or ".." in ruta or ruta.startswith("/") or ruta.startswith("\\"):
+        raise HTTPException(status_code=400, detail="Ruta inválida")
+
+    if STORAGE_BACKEND == "local":
+        ruta_local = almacenamiento.upload_dir / ruta
+        if not ruta_local.is_file():
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
+        contenido = ruta_local.read_bytes()
+    else:
+        try:
+            r = _requests_proxy.get(almacenamiento.url_publica(ruta), timeout=30)
+            r.raise_for_status()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
+        contenido = r.content
+
+    tipo = _mimetypes_proxy.guess_type(ruta)[0] or "application/octet-stream"
+    return _ResponseProxy(content=contenido, media_type=tipo)
 
 
 
