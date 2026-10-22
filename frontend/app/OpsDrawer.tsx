@@ -1293,7 +1293,7 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
     // Dibuja, debajo de una OP, todas sus evidencias (fotos de Helbot + archivos del ERP).
     const dibujarEvidenciasGrupo = async (grupo: GrupoPdf) => {
       // Solo las imágenes de "Fotos y documentos" de cada producto de la OP
-      const items: { titulo: string; url: string }[] = [];
+      const items: { titulo: string; url: string; fetchUrl: string }[] = [];
       const vistas = new Set<string>();
 
       for (const codigo of grupo.codigos) {
@@ -1306,7 +1306,11 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
             const url = im.url || `${API_BASE}/archivos/${im.ruta_archivo}`;
             if (!esImagenUrl(url) || vistas.has(url)) return; // solo imágenes
             vistas.add(url);
-            items.push({ titulo: `Evidencia ${codigo} (${i + 1})`, url });
+            items.push({
+              titulo: `Evidencia ${codigo} (${i + 1})`,
+              url,
+              fetchUrl: `${API_BASE}/erp/archivos-proxy?ruta=${encodeURIComponent(im.ruta_archivo)}`,
+            });
           });
         } catch {}
       }
@@ -1343,7 +1347,7 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
         // Cargar las imágenes de la fila y calcular su tamaño dentro de la celda
         const cargadas = await Promise.all(
           fila.map(async (item) => {
-            const img = await cargarImagenPdf(item.url);
+            const img = await cargarImagenPdf(item.fetchUrl);
             if (!img) return { item, img: null as null, w: 0, h: 0 };
             const esc = Math.min(anchoCelda / img.w, altoMaxImg / img.h);
             return { item, img, w: img.w * esc, h: img.h * esc };
@@ -1531,7 +1535,8 @@ export default function OpsDrawer({ venta, onClose, usuarioActual, esSeguimiento
       // La marca se envuelve en varias líneas si es larga (ancho de la columna izquierda: 320)
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
-      const marcaTexto = (p as any).marca ? `MARCA: ${String((p as any).marca)}` : "";
+      const marcaLimpia = String((p as any).marca || "").replace(/^\s*marca\s*:\s*/i, "").trim();
+      const marcaTexto = marcaLimpia ? `MARCA: ${marcaLimpia}` : "";
       const marcaLineas: string[] = marcaTexto ? doc.splitTextToSize(marcaTexto, 320) : [];
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
