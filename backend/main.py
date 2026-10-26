@@ -96,6 +96,7 @@ from routers import cumpleanos as cumpleanos_mod
 
 from chat import router as chat_router
 from proveedores import router as proveedores_router, crear_tablas as crear_tablas_proveedores
+from clientes import router as clientes_router, crear_tablas as crear_tablas_clientes
 
 logger = logging.getLogger("helbot.main")
 logging.basicConfig(level=logging.INFO)
@@ -138,7 +139,7 @@ CORS_ORIGINS = [
     "http://localhost:3002",
     "http://127.0.0.1:3002",
     "http://192.168.1.89:3002",
-    "http://192.168.1.16:3000",
+    "http://192.168.1.99:3000",
     "http://192.168.18.12:3000",
     "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
 ]
@@ -186,6 +187,7 @@ app.include_router(cumpleanos_mod.router)
 
 app.include_router(chat_router)
 app.include_router(proveedores_router)
+app.include_router(clientes_router)
 
 
 
@@ -437,6 +439,12 @@ async def on_startup():
         logger.info("Tablas de proveedores verificadas/creadas")
     except Exception as e:
         logger.error(f"No se pudieron crear las tablas de proveedores: {e}")
+
+    try:
+        crear_tablas_clientes()
+        logger.info("Tablas de clientes verificadas/creadas")
+    except Exception as e:
+        logger.error(f"No se pudieron crear las tablas de clientes: {e}")
 
     # Al arrancar, ningún WebSocket de chat está vivo todavía — si el
     # backend se cayó de golpe la vez anterior, la columna `online` pudo

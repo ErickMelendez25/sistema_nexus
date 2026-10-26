@@ -23,9 +23,11 @@ import {
   ShieldCheck,
   Lock,
   Store,
+  Users,
 } from "lucide-react";
 import { ModalConsultarPrecios } from "./ModalConsultarPrecios";
 import { ModalConsultarProveedores } from "./ModalConsultarProveedores";
+import { ModalConsultarClientes } from "./ModalConsultarClientes";
 
 const API_BASE = process.env.NEXT_PUBLIC_HELBOT_API || "http://localhost:4001";
 
@@ -705,6 +707,7 @@ export default function TabVentasErp({ ventas, meta, cargando, error, sinSesion,
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [modalPreciosAbierto, setModalPreciosAbierto] = useState(false);
   const [modalProveedoresAbierto, setModalProveedoresAbierto] = useState(false);
+  const [modalClientesAbierto, setModalClientesAbierto] = useState(false);
 
   const [pagina, setPagina] = useState(1);
 
@@ -885,6 +888,14 @@ const filtrosActivos = [
             Consultar proveedor
         </button>
 
+        <button
+            onClick={() => setModalClientesAbierto(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-sm font-medium text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100 transition-colors"
+          >
+            <Users size={14} />
+            Consultar cliente
+        </button>
+
 
         <button
             onClick={() => setMostrarFiltros((x) => !x)}
@@ -932,6 +943,11 @@ const filtrosActivos = [
       <ModalConsultarProveedores
         abierto={modalProveedoresAbierto}
         onCerrar={() => setModalProveedoresAbierto(false)}
+      />
+
+      <ModalConsultarClientes
+        abierto={modalClientesAbierto}
+        onCerrar={() => setModalClientesAbierto(false)}
       />
 
       {sinSesion && (
