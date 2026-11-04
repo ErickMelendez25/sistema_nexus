@@ -139,7 +139,7 @@ CORS_ORIGINS = [
     "http://localhost:3002",
     "http://127.0.0.1:3002",
     "http://192.168.1.89:3002",
-    "http://192.168.1.99:3000",
+    "http://192.168.1.244:3000",
     "http://192.168.18.12:3000",
     "https://nexus.gruecolimp.com", # <-- reemplaza con tu dominio real de producción
 ]

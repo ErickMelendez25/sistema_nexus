@@ -235,3 +235,4 @@ google-genai==1.21.1
 msal==1.37.0
 email-validator==2.3.0
 playwright
+requests[socks]

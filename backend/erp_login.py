@@ -67,6 +67,10 @@ VENTAS_CACHE_SEGUNDOS = 120       # cuánto tiempo se reusa el listado ya descar
 class ErpSession:
     def __init__(self):
         self.session = requests.Session()
+        proxy = os.getenv("ERP_PROXY")  # ej: socks5h://127.0.0.1:40000
+        if proxy:
+            self.session.proxies.update({"http": proxy, "https": proxy})
+            logger.info("ERP: usando proxy de salida")
         self.token: str | None = None
         self.usuario: str | None = None
         self.password: str | None = None
