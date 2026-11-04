@@ -192,8 +192,6 @@ tenacity==8.5.0
 termcolor==3.3.0
 threadpoolctl==3.6.0
 tokenizers==0.22.2
-torch==2.12.1
-torchvision==0.27.1
 tqdm==4.68.2
 transformers==5.11.0
 tree-sitter==0.25.2
