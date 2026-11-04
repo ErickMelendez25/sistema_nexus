@@ -2,17 +2,12 @@ services:
   backend:
     build: ./backend
     restart: always
-    ports:
-      - '4002:4002'
+    network_mode: host
+    env_file:
+      - .env
     volumes:
       - 'uploads_data:/data/op_productos'
       - 'reportes_data:/data/reportes_perucompras'
-    networks:
-      - coolify
-
-networks:
-  coolify:
-    external: true
 
 volumes:
   uploads_data: null
