@@ -14,6 +14,7 @@ MEF SCRAPER - INDUSTRIAL GRADE FINAL
 
 import io
 import re
+import os
 import time
 import logging
 import requests
@@ -47,6 +48,19 @@ HEADERS = {
 
 MAX_INTENTOS = 4
 TIMEOUT = 20
+
+MEF_PROXY = os.getenv("MEF_PROXY")
+
+
+def nueva_sesion():
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    if MEF_PROXY:
+        s.proxies.update({"http": MEF_PROXY, "https": MEF_PROXY})
+        logger.info("MEF: usando proxy de salida")
+    else:
+        logger.warning("MEF: MEF_PROXY no definido, saliendo sin proxy")
+    return s
 
 # ============================================================
 # REQUEST MODEL (FRONTEND FLEXIBLE)
@@ -321,11 +335,11 @@ def consultar_mef(sec_ejec, expediente) -> Dict[str, Any]:
     for intento in range(1, MAX_INTENTOS + 1):
 
         try:
-            session = requests.Session()
-            session.headers.update(HEADERS)
+            session = nueva_sesion()
 
             # 1. GET
             r = session.get(BASE_URL, timeout=TIMEOUT)
+            logger.info(f"[{intento}] GET inicial MEF: status={r.status_code}")
             html = r.text
 
             time.sleep(0.2)
@@ -353,13 +367,6 @@ def consultar_mef(sec_ejec, expediente) -> Dict[str, Any]:
 
             # 🔽 NUEVO: probar ddddocr (gratis, corre en tu PC)
             resultado_ddddocr = solve_captcha_ddddocr(cap.content)
-            if resultado_ddddocr:
-                logger.info(f"[{intento}] ddddocr leyó: {resultado_ddddocr}")
-                candidatos = [resultado_ddddocr] + candidatos
-
-            if not candidatos:
-                logger.info(f"[{intento}] captcha no leído")
-                continue
             if resultado_ddddocr:
                 logger.info(f"[{intento}] ddddocr leyó: {resultado_ddddocr}")
                 candidatos = [resultado_ddddocr] + candidatos
