@@ -22,3 +22,4 @@ frontend/.env
 frontend/.env.local
 *.log
 .DS_Store
+codigos_2fa.csv 

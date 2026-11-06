@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   LogIn,
@@ -33,40 +33,60 @@ export default function LoginPage() {
 const [cargando, setCargando] = useState(false);
 const [error, setError] = useState("");
 const [transicionExitosa, setTransicionExitosa] = useState(false);
+  const [temp2fa, setTemp2fa] = useState<string | null>(null);
+  const [codigo, setCodigo] = useState("");
 
-const iniciarSesion = async (e: React.FormEvent) => {
+  useEffect(() => {
+    const aviso = localStorage.getItem("helbot_aviso");
+    if (aviso) {
+      setError(aviso);
+      localStorage.removeItem("helbot_aviso");
+    }
+  }, []);
+
+  const entrar = (data: { token: string; usuario: unknown }) => {
+    localStorage.setItem("helbot_token", data.token);
+    localStorage.setItem("helbot_usuario", JSON.stringify(data.usuario));
+    setTransicionExitosa(true);
+    setTimeout(() => {
+      router.push("/");
+    }, 900);
+  };
+
+  const iniciarSesion = async (e: React.FormEvent) => {
     e.preventDefault();
     setCargando(true);
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/auth/login`, {
+      const paso2 = temp2fa !== null;
+      const r = await fetch(`${API_BASE}${paso2 ? "/auth/verificar-2fa" : "/auth/login"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(paso2 ? { temp_token: temp2fa, codigo } : { username, password }),
       });
       if (r.status === 429) {
         throw new Error("Demasiados intentos. Espera 1 minuto antes de volver a intentar.");
       }
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
+        if (paso2 && /expirada|Token inválido/.test(String(body.detail))) {
+          setTemp2fa(null);
+          setCodigo("");
+        }
         throw new Error(body.detail || "Usuario o contraseña incorrectos");
       }
       const data = await r.json();
-      // Guardamos el token y los datos del usuario para que page.tsx los use
-      // en cada fetch (header Authorization) y para pintar catálogos permitidos.
-      localStorage.setItem("helbot_token", data.token);
-      localStorage.setItem("helbot_usuario", JSON.stringify(data.usuario));
-      setTransicionExitosa(true);
-      setTimeout(() => {
-        router.push("/");
-      }, 900);
+      if (data.requiere_2fa) {
+        setTemp2fa(data.temp_token);
+        return;
+      }
+      entrar(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error desconocido");
     } finally {
       setCargando(false);
     }
   };
-
   return (
     <div className="relative min-h-screen w-full flex flex-col lg:flex-row overflow-hidden bg-[#10172A]">
       <style jsx global>{`
@@ -210,6 +230,7 @@ const iniciarSesion = async (e: React.FormEvent) => {
             </div>
 
             <form onSubmit={iniciarSesion} className="space-y-4" noValidate>
+              <fieldset disabled={temp2fa !== null} className="space-y-4 border-0 p-0 m-0 min-w-0">
               <div>
                 <label
                   htmlFor="username"
@@ -265,6 +286,30 @@ const iniciarSesion = async (e: React.FormEvent) => {
                 </div>
               </div>
 
+</fieldset>
+
+              {temp2fa !== null && (
+                <div>
+                  <label
+                    htmlFor="codigo2fa"
+                    className="block text-[10.5px] font-semibold text-slate-500 tracking-[0.1em] uppercase mb-1.5"
+                  >
+                    Código de tu app autenticadora
+                  </label>
+                  <input
+                    id="codigo2fa"
+                    value={codigo}
+                    onChange={(e) => setCodigo(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    disabled={cargando}
+                    placeholder="000000"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-center text-lg tracking-[0.5em] text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-400 focus:bg-white disabled:opacity-60"
+                  />
+                </div>
+              )}
+
               {error && (
                 <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2.5">
                   <AlertTriangle size={14} className="shrink-0 mt-0.5" />
@@ -274,7 +319,7 @@ const iniciarSesion = async (e: React.FormEvent) => {
 
               <button
                 type="submit"
-                disabled={cargando || !username || !password}
+                disabled={cargando || !username || !password || (temp2fa !== null && codigo.length < 6)}
                 className="group relative w-full flex items-center justify-center gap-2 overflow-hidden bg-[#10172A] text-white font-medium rounded-lg py-2.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#1B2438] active:scale-[0.99] transition-all shadow-[0_4px_14px_-4px_rgba(27,42,78,0.4)]"
               >
                 {cargando && (
@@ -298,6 +343,11 @@ const iniciarSesion = async (e: React.FormEvent) => {
             </form>
 
             <p className="text-center text-[11px] text-slate-400 mt-6">
+              ¿Primera vez o cambiaste de celular?{" "}
+              <a href="/activar-2fa" className="text-indigo-600 font-medium hover:underline">
+                Activar verificación en dos pasos
+              </a>
+              <br />
               ¿Problemas para ingresar? Contacta al equipo de soporte técnico.
             </p>
           </div>

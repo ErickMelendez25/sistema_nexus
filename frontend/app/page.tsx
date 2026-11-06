@@ -7,7 +7,7 @@ import {
   Radar, Bell, FileScan, Search, CheckCircle2, Circle, Loader2,
   Upload, Wifi, WifiOff, ShieldCheck, DollarSign, RefreshCw, ChevronRight,
   AlertTriangle, X, LogIn, Menu, LucideIcon, GitCompareArrows, ChevronDown, ChevronUp,
-LogOut, BarChart3, User, Briefcase, PieChart, MessageSquare, Send, Percent, Clock, Mail,
+LogOut, BarChart3, User, Briefcase, PieChart, MessageSquare, Send, Percent, Clock, Mail, Camera, AtSign, Hash,
 } from "lucide-react";
 import {
   BarChart,
@@ -2787,69 +2787,193 @@ const tabs = esAdmin
           </div>
         )}
         {perfilAbierto && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-slate-950/50" onClick={() => setPerfilAbierto(false)} />
-            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 style={{ fontFamily: "var(--font-display)" }} className="text-base font-semibold text-slate-900">
-                  Foto de perfil
-                </h3>
-                <button onClick={() => setPerfilAbierto(false)} className="text-slate-400 hover:text-slate-700">
-                  <X size={16} />
-                </button>
+          <div
+            className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="titulo-perfil"
+          >
+            <div
+              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+              onClick={() => setPerfilAbierto(false)}
+            />
+            <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
+              {/* Cabecera oscura con filo dorado */}
+              <div className="relative bg-[#0E1424] px-6 pt-5 pb-14">
+                <span
+                  aria-hidden
+                  className="absolute left-0 right-0 bottom-0 h-px"
+                  style={{ background: "linear-gradient(90deg, #C9A227 0%, #C9A22700 75%)" }}
+                />
+                <div className="flex items-center justify-between">
+                  <p id="titulo-perfil" className="text-[13px] font-medium text-slate-400">
+                    Mi perfil
+                  </p>
+                  <button
+                    onClick={() => setPerfilAbierto(false)}
+                    className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                    aria-label="Cerrar"
+                  >
+                    <X size={16} strokeWidth={1.75} />
+                  </button>
+                </div>
               </div>
 
-              <div className="flex flex-col items-center gap-4">
-                <div className="w-24 h-24 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center overflow-hidden">
-                  {usuario?.foto_perfil ? (
-                    <img
-                      src={`${API_BASE}/archivos/${usuario.foto_perfil}`}
-                      alt="Foto de perfil"
-                      className="w-full h-full object-cover"
+              {/* Avatar + nombre + rol */}
+              <div className="px-6 -mt-12 flex items-end gap-4">
+                <div className="relative shrink-0">
+                  <div className="w-24 h-24 rounded-full ring-4 ring-white bg-white overflow-hidden">
+                    <AvatarToastChat
+                      nombre={usuarioActual}
+                      foto={usuario?.foto_perfil ?? null}
+                      tamano={96}
                     />
-                  ) : (
-                    <span style={{ fontFamily: "var(--font-display)" }} className="text-2xl font-semibold text-[#4F46E5]">
-                      {usuarioActual
-                        .split(" ")
-                        .filter(Boolean)
-                        .slice(0, 2)
-                        .map((w) => w[0]?.toUpperCase())
-                        .join("") || "?"}
+                  </div>
+                  <label
+                    title="Cambiar foto"
+                    className={`absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full bg-[#0E1424] text-white ring-2 ring-white flex items-center justify-center transition-colors ${
+                      subiendoFoto ? "opacity-70 cursor-wait" : "cursor-pointer hover:bg-[#1B2438]"
+                    }`}
+                  >
+                    {subiendoFoto ? (
+                      <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
+                    ) : (
+                      <Camera size={14} strokeWidth={1.75} />
+                    )}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      disabled={subiendoFoto}
+                      onChange={(e) => {
+                        const archivo = e.target.files?.[0];
+                        if (archivo) subirFotoPerfil(archivo);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="min-w-0 pb-1">
+                  <h3
+                    style={{ fontFamily: "var(--font-display)" }}
+                    className="text-lg font-semibold text-slate-900 truncate leading-tight"
+                  >
+                    {usuarioActual || "Usuario"}
+                  </h3>
+                  <span className="inline-block mt-1 text-[11px] font-medium capitalize px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                    {rol || "sin rol"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Datos de la cuenta */}
+              <dl className="mt-5 mx-6 divide-y divide-slate-100 border-y border-slate-100">
+                {[
+                  {
+                    icono: AtSign,
+                    etiqueta: "Usuario",
+                    valor: usuario?.username || "—",
+                    mono: true,
+                  },
+                  {
+                    icono: Hash,
+                    etiqueta: "ID de usuario",
+                    valor: usuario?.id != null ? String(usuario.id) : "—",
+                    mono: true,
+                  },
+                  {
+                    icono: ShieldCheck,
+                    etiqueta: "Rol",
+                    valor: rol || "—",
+                    capitalizar: true,
+                  },
+                  {
+                    icono: Briefcase,
+                    etiqueta: "Catálogos permitidos",
+                    valor:
+                      usuario?.catalogos_permitidos && usuario.catalogos_permitidos.length > 0
+                        ? usuario.catalogos_permitidos.join(", ")
+                        : "Acceso completo",
+                    mono: true,
+                  },
+                ].map((fila) => (
+                  <div key={fila.etiqueta} className="flex items-center justify-between gap-4 py-3">
+                    <dt className="flex items-center gap-2.5 text-[13px] text-slate-500">
+                      <fila.icono size={15} strokeWidth={1.75} className="text-slate-400 shrink-0" />
+                      {fila.etiqueta}
+                    </dt>
+                    <dd
+                      style={fila.mono ? { fontFamily: "var(--font-mono)" } : undefined}
+                      className={`text-[13px] font-medium text-slate-800 text-right truncate max-w-[55%] ${
+                        fila.capitalizar ? "capitalize" : ""
+                      }`}
+                    >
+                      {fila.valor}
+                    </dd>
+                  </div>
+                ))}
+
+                {/* Estado de conexión */}
+                <div className="flex items-center justify-between gap-4 py-3">
+                  <dt className="flex items-center gap-2.5 text-[13px] text-slate-500">
+                    {wsConectado ? (
+                      <Wifi size={15} strokeWidth={1.75} className="text-slate-400 shrink-0" />
+                    ) : (
+                      <WifiOff size={15} strokeWidth={1.75} className="text-slate-400 shrink-0" />
+                    )}
+                    Conexión
+                  </dt>
+                  <dd className="flex items-center gap-1.5 text-[13px] font-medium">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${wsConectado ? "bg-emerald-500" : "bg-amber-500"}`}
+                    />
+                    <span className={wsConectado ? "text-emerald-700" : "text-amber-700"}>
+                      {wsConectado ? "En línea" : "Reconectando"}
                     </span>
-                  )}
+                  </dd>
                 </div>
 
-                <label className="flex items-center justify-center gap-2 w-full border-2 border-dashed border-slate-300 rounded-lg py-3 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors">
-                  {subiendoFoto ? <Loader2 size={15} className="animate-spin text-slate-400" /> : <Upload size={15} className="text-slate-400" />}
-                  <span className="text-xs text-slate-500">{subiendoFoto ? "Subiendo..." : "Subir nueva foto"}</span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    className="hidden"
-                    disabled={subiendoFoto}
-                    onChange={(e) => {
-                      const archivo = e.target.files?.[0];
-                      if (archivo) subirFotoPerfil(archivo);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
+                <div className="flex items-center justify-between gap-4 py-3">
+                  <dt className="flex items-center gap-2.5 text-[13px] text-slate-500">
+                    <CheckCircle2 size={15} strokeWidth={1.75} className="text-slate-400 shrink-0" />
+                    Sesión ERP
+                  </dt>
+                  <dd className="flex items-center gap-1.5 text-[13px] font-medium">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${sesion.erp ? "bg-emerald-500" : "bg-slate-300"}`}
+                    />
+                    <span className={sesion.erp ? "text-emerald-700" : "text-slate-500"}>
+                      {sesion.erp ? "Conectada" : "Sin iniciar"}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
 
-                {usuario?.foto_perfil && (
-                  <button
-                    onClick={eliminarFotoPerfil}
-                    disabled={subiendoFoto}
-                    className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50"
-                  >
-                    Quitar foto actual
-                  </button>
-                )}
-
-                {errorFoto && (
-                  <p className="text-xs text-red-600 flex items-center gap-1">
-                    <AlertTriangle size={12} /> {errorFoto}
-                  </p>
-                )}
+              {/* Pie: acciones de la foto */}
+              <div className="px-6 py-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  {errorFoto ? (
+                    <p className="text-xs text-red-600 flex items-center gap-1">
+                      <AlertTriangle size={12} /> {errorFoto}
+                    </p>
+                  ) : usuario?.foto_perfil ? (
+                    <button
+                      onClick={eliminarFotoPerfil}
+                      disabled={subiendoFoto}
+                      className="text-xs font-medium text-slate-500 hover:text-red-600 transition-colors disabled:opacity-50"
+                    >
+                      Quitar foto actual
+                    </button>
+                  ) : (
+                    <p className="text-xs text-slate-400">Toca la cámara para subir tu foto</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setPerfilAbierto(false)}
+                  className="px-4 py-2 rounded-lg bg-[#0E1424] text-white text-[13px] font-medium hover:bg-[#1B2438] transition-colors"
+                >
+                  Cerrar
+                </button>
               </div>
             </div>
           </div>
